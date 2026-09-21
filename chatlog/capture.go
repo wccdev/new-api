@@ -81,7 +81,7 @@ func Capture() gin.HandlerFunc {
 			responseBody: writer.body.Bytes(),
 			contentType:  writer.Header().Get("Content-Type"),
 			record: Record{
-				Schema:    recordSchemaVersion,
+				Schema:    convert.RecordSchemaVersion,
 				RequestId: c.GetString(common.RequestIdKey),
 				CreatedAt: startedAt.Unix(),
 				LatencyMs: time.Since(startedAt).Milliseconds(),

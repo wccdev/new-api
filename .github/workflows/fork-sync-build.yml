@@ -26,6 +26,7 @@ on:
     paths:
       - 'chatlog/**'
       - '!chatlog/**/*.md'
+      - '!chatlog/bin/**'
       - 'middleware/chatlog.go'
       - 'router/chatlog-router.go'
       - 'web/src/features/usage-logs/chatlog/**'

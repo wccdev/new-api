@@ -21,7 +21,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/QuantumNous/new-api/chatlog"
 	"github.com/QuantumNous/new-api/chatlog/convert"
 	"github.com/QuantumNous/new-api/common"
 
@@ -41,7 +40,7 @@ type options struct {
 }
 
 type sample struct {
-	record   chatlog.Record
+	record   convert.Record
 	messages []convert.Message
 	tools    []any
 }
@@ -170,7 +169,7 @@ func scan(files []string, opts options, visit func(sample) error) error {
 }
 
 func usableSample(line []byte, opts options) (sample, bool) {
-	var record chatlog.Record
+	var record convert.Record
 	if err := common.Unmarshal(line, &record); err != nil {
 		return sample{}, false
 	}

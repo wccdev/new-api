@@ -152,14 +152,22 @@ rsync -av node2:/path/to/new-api/data/chatlog/ /srv/chatlog-all/
 
 ### 3.2 运行导出工具
 
-导出工具在本仓库里，需要 Go（版本见 `go.mod`）。在任意一台有仓库代码的机器上：
+仓库里带了预编译好的 linux/amd64 二进制 `chatlog/bin/chatlog-export-linux-amd64`（静态链接，无依赖，
+拷到任意 amd64 Linux 机器即可运行）：
 
 ```bash
-# 一次性编译，之后拷着这个二进制用即可
-go build -o chatlog-export ./chatlog/cmd/chatlog-export
-
-./chatlog-export -dir /srv/chatlog-all -out sft.jsonl -from 2026-09-01 -to 2026-09-30
+chmod +x chatlog-export-linux-amd64
+./chatlog-export-linux-amd64 -dir /srv/chatlog-all -out sft.jsonl -from 2026-09-01 -to 2026-09-30
 ```
+
+导出逻辑（`chatlog/cmd/chatlog-export`、`chatlog/convert`）有改动后需要重新编译并提交这个二进制：
+
+```bash
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w" \
+  -o chatlog/bin/chatlog-export-linux-amd64 ./chatlog/cmd/chatlog-export
+```
+
+其他平台去掉 `GOOS/GOARCH` 自行编译即可（需要 Go，版本见 `go.mod`）。
 
 | 参数 | 说明 |
 |---|---|
