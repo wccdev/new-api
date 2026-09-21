@@ -1,0 +1,188 @@
+# Fork maintenance for the chatlog build:
+#   1. merge the latest upstream *release* tag into main (merge, never rebase, so
+#      nothing is force-pushed),
+#   2. verify the chatlog packages still build and pass their tests,
+#   3. publish an amd64 image to Docker Hub.
+#
+# Required repository secrets:
+#   SYNC_PAT            PAT with `repo` + `workflow` scopes. The default
+#                       GITHUB_TOKEN cannot push upstream changes that touch
+#                       .github/workflows/.
+#   DOCKER_USERNAME     Docker Hub account
+#   DOCKER_PASSWORD     Docker Hub access token (read/write)
+# Optional repository variable:
+#   DOCKERHUB_IMAGE     image name, default aidenlu/new-api
+#
+# Do not push git tags to this fork: upstream's tag-triggered workflows
+# (docker-build, release, electron-build, ...) would run. Disable them once with
+# `gh workflow disable <name>`.
+name: Fork sync & publish (chatlog)
+
+on:
+  schedule:
+    - cron: '17 19 * * *' # 03:17 Asia/Shanghai
+  push:
+    branches: [main]
+    paths:
+      - 'chatlog/**'
+      - 'middleware/chatlog.go'
+      - 'router/chatlog-router.go'
+      - 'web/src/features/usage-logs/chatlog/**'
+      - '.github/workflows/fork-sync-build.yml'
+  workflow_dispatch:
+    inputs:
+      upstream_tag:
+        description: 'Upstream tag to merge (default: latest upstream release)'
+        required: false
+        type: string
+      force_build:
+        description: 'Build and push even if this commit already has an image'
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: fork-sync-build
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_REPO: QuantumNous/new-api
+  IMAGE: ${{ vars.DOCKERHUB_IMAGE || 'aidenlu/new-api' }}
+
+jobs:
+  sync-build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+    steps:
+      - name: Check out main
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.SYNC_PAT }}
+
+      - name: Merge upstream release
+        id: sync
+        env:
+          GH_TOKEN: ${{ secrets.SYNC_PAT }}
+          INPUT_TAG: ${{ inputs.upstream_tag }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream "https://github.com/${UPSTREAM_REPO}.git"
+          # Tags stay local; they are only used to find and describe the merge base.
+          git fetch --quiet --tags upstream
+
+          TAG="${INPUT_TAG:-}"
+          if [ -z "$TAG" ]; then
+            TAG=$(gh api "repos/${UPSTREAM_REPO}/releases/latest" --jq .tag_name)
+          fi
+          git rev-parse --verify --quiet "refs/tags/${TAG}^{commit}" >/dev/null || {
+            echo "::error::upstream tag '${TAG}' not found"; exit 1; }
+
+          if git merge-base --is-ancestor "refs/tags/${TAG}" HEAD; then
+            echo "main already contains ${TAG}"
+            echo "merged=false" >> "$GITHUB_OUTPUT"
+          elif git merge --no-edit -m "chore: merge upstream ${TAG}" "refs/tags/${TAG}"; then
+            echo "merged=true" >> "$GITHUB_OUTPUT"
+          else
+            CONFLICTS=$(git diff --name-only --diff-filter=U)
+            git merge --abort
+            {
+              echo "### Merge of upstream ${TAG} has conflicts"
+              echo '```'
+              echo "$CONFLICTS"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            gh issue create --repo "$GITHUB_REPOSITORY" \
+              --title "Upstream ${TAG} conflicts with chatlog changes" \
+              --body "Automatic merge failed. Conflicted files:"$'\n\n'"${CONFLICTS}" || true
+            echo "::error::merge conflict with upstream ${TAG}; resolve manually on main"
+            exit 1
+          fi
+
+          BASE_TAG=$(git describe --tags --abbrev=0 --match 'v*' --exclude '*nightly*' HEAD)
+          SHORT_SHA=$(git rev-parse --short=8 HEAD)
+          echo "version=${BASE_TAG}-chatlog" >> "$GITHUB_OUTPUT"
+          echo "build_tag=${BASE_TAG}-chatlog-${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Decide whether an image is needed
+        id: need
+        env:
+          BUILD_TAG: ${{ steps.sync.outputs.build_tag }}
+          FORCE: ${{ inputs.force_build }}
+        run: |
+          if [ "$FORCE" = "true" ] || ! docker manifest inspect "${IMAGE}:${BUILD_TAG}" >/dev/null 2>&1; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "${IMAGE}:${BUILD_TAG} already exists, nothing to do" >> "$GITHUB_STEP_SUMMARY"
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Go
+        if: steps.need.outputs.build == 'true'
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            relaykit/go.sum
+
+      - name: Verify chatlog integration
+        if: steps.need.outputs.build == 'true'
+        run: |
+          set -euo pipefail
+          # The two hook lines must have survived the merge.
+          grep -q 'middleware.ChatlogCapture()' router/relay-router.go
+          grep -q 'SetChatlogRouter(router)' router/main.go
+          grep -q 'ConversationButton' web/src/features/usage-logs/components/columns/common-logs-columns.tsx
+          go vet ./chatlog/... ./router/... ./middleware/...
+          go test ./chatlog/...
+
+      - name: Push merged main
+        if: steps.sync.outputs.merged == 'true'
+        run: git push origin HEAD:main
+
+      - name: Set up Docker Buildx
+        if: steps.need.outputs.build == 'true'
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Log in to Docker Hub
+        if: steps.need.outputs.build == 'true'
+        uses: docker/login-action@c99871dec2022cc055c062a10cc1a1310835ceb4 # v4.3.0
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Write VERSION
+        if: steps.need.outputs.build == 'true'
+        run: echo "${{ steps.sync.outputs.version }}" > VERSION
+
+      - name: Build & push (linux/amd64)
+        if: steps.need.outputs.build == 'true'
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ steps.sync.outputs.build_tag }}
+            ${{ env.IMAGE }}:${{ steps.sync.outputs.version }}
+            ${{ env.IMAGE }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Summary
+        if: steps.need.outputs.build == 'true'
+        run: |
+          {
+            echo "### Published"
+            echo '```'
+            echo "${IMAGE}:${{ steps.sync.outputs.build_tag }}"
+            echo "${IMAGE}:${{ steps.sync.outputs.version }}"
+            echo "${IMAGE}:latest"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
