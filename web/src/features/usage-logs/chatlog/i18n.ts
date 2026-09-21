@@ -52,6 +52,11 @@ export const chatlogResources: Record<string, ChatlogTranslations> = {
     'Copy response JSON': 'Copy response JSON',
     'View image {{index}}': 'View image {{index}}',
     'Conversation image {{index}}': 'Conversation image {{index}}',
+    'Show all ({{total}} characters)': 'Show all ({{total}} characters)',
+    'Show {{shown}} earlier messages ({{hidden}} hidden)':
+      'Show {{shown}} earlier messages ({{hidden}} hidden)',
+    'Download request JSON': 'Download request JSON',
+    'Download response JSON': 'Download response JSON',
   },
   zhCN: {
     'View conversation': '查看对话',
@@ -77,6 +82,11 @@ export const chatlogResources: Record<string, ChatlogTranslations> = {
     'Copy response JSON': '复制响应 JSON',
     'View image {{index}}': '查看图片 {{index}}',
     'Conversation image {{index}}': '对话图片 {{index}}',
+    'Show all ({{total}} characters)': '显示全部（共 {{total}} 字符）',
+    'Show {{shown}} earlier messages ({{hidden}} hidden)':
+      '显示更早的 {{shown}} 条消息（已隐藏 {{hidden}} 条）',
+    'Download request JSON': '下载请求 JSON',
+    'Download response JSON': '下载响应 JSON',
   },
   zhTW: {
     'View conversation': '檢視對話',
@@ -102,6 +112,11 @@ export const chatlogResources: Record<string, ChatlogTranslations> = {
     'Copy response JSON': '複製回應 JSON',
     'View image {{index}}': '檢視圖片 {{index}}',
     'Conversation image {{index}}': '對話圖片 {{index}}',
+    'Show all ({{total}} characters)': '顯示全部（共 {{total}} 字元）',
+    'Show {{shown}} earlier messages ({{hidden}} hidden)':
+      '顯示更早的 {{shown}} 則訊息（已隱藏 {{hidden}} 則）',
+    'Download request JSON': '下載請求 JSON',
+    'Download response JSON': '下載回應 JSON',
   },
   fr: {
     'View conversation': 'Voir la conversation',
@@ -129,6 +144,11 @@ export const chatlogResources: Record<string, ChatlogTranslations> = {
     'Copy response JSON': 'Copier le JSON de la réponse',
     'View image {{index}}': "Voir l'image {{index}}",
     'Conversation image {{index}}': 'Image de la conversation {{index}}',
+    'Show all ({{total}} characters)': 'Tout afficher ({{total}} caractères)',
+    'Show {{shown}} earlier messages ({{hidden}} hidden)':
+      'Afficher {{shown}} messages précédents ({{hidden}} masqués)',
+    'Download request JSON': 'Télécharger le JSON de la requête',
+    'Download response JSON': 'Télécharger le JSON de la réponse',
   },
   ru: {
     'View conversation': 'Просмотреть диалог',
@@ -156,6 +176,11 @@ export const chatlogResources: Record<string, ChatlogTranslations> = {
     'Copy response JSON': 'Копировать JSON ответа',
     'View image {{index}}': 'Открыть изображение {{index}}',
     'Conversation image {{index}}': 'Изображение диалога {{index}}',
+    'Show all ({{total}} characters)': 'Показать всё ({{total}} символов)',
+    'Show {{shown}} earlier messages ({{hidden}} hidden)':
+      'Показать ещё {{shown}} предыдущих сообщений (скрыто: {{hidden}})',
+    'Download request JSON': 'Скачать JSON запроса',
+    'Download response JSON': 'Скачать JSON ответа',
   },
   ja: {
     'View conversation': '会話を表示',
@@ -183,6 +208,11 @@ export const chatlogResources: Record<string, ChatlogTranslations> = {
     'Copy response JSON': 'レスポンス JSON をコピー',
     'View image {{index}}': '画像 {{index}} を表示',
     'Conversation image {{index}}': '会話の画像 {{index}}',
+    'Show all ({{total}} characters)': 'すべて表示（{{total}} 文字）',
+    'Show {{shown}} earlier messages ({{hidden}} hidden)':
+      '以前のメッセージを {{shown}} 件表示（{{hidden}} 件非表示）',
+    'Download request JSON': 'リクエスト JSON をダウンロード',
+    'Download response JSON': 'レスポンス JSON をダウンロード',
   },
   vi: {
     'View conversation': 'Xem hội thoại',
@@ -210,6 +240,11 @@ export const chatlogResources: Record<string, ChatlogTranslations> = {
     'Copy response JSON': 'Sao chép JSON phản hồi',
     'View image {{index}}': 'Xem hình ảnh {{index}}',
     'Conversation image {{index}}': 'Hình ảnh hội thoại {{index}}',
+    'Show all ({{total}} characters)': 'Hiển thị tất cả ({{total}} ký tự)',
+    'Show {{shown}} earlier messages ({{hidden}} hidden)':
+      'Hiển thị {{shown}} tin nhắn trước đó (đang ẩn {{hidden}})',
+    'Download request JSON': 'Tải xuống JSON yêu cầu',
+    'Download response JSON': 'Tải xuống JSON phản hồi',
   },
 }
 

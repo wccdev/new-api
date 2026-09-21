@@ -31,6 +31,7 @@ import {
 import { cn } from '@/lib/utils'
 
 import { ImageDialog } from '../components/dialogs/image-dialog'
+import { LongText } from './conversation-long-text'
 import { withOccurrenceKeys } from './occurrence-keys'
 import './i18n'
 import type { ChatlogMessage, ChatlogRole, ChatlogToolCall } from './types'
@@ -100,9 +101,9 @@ function ToolCallSection(props: { toolCall: ChatlogToolCall }) {
             {props.toolCall.id}
           </p>
         )}
-        <pre className={codeBlockClassName}>
-          {formatToolArguments(props.toolCall.arguments)}
-        </pre>
+        <LongText text={formatToolArguments(props.toolCall.arguments)}>
+          {(text) => <pre className={codeBlockClassName}>{text}</pre>}
+        </LongText>
       </div>
     </CollapsibleSection>
   )
@@ -192,21 +193,30 @@ export function ConversationMessage(props: { message: ChatlogMessage }) {
 
       {message.reasoning && (
         <CollapsibleSection title={t('Reasoning')}>
-          <p className={cn(plainTextClassName, 'text-muted-foreground')}>
-            {message.reasoning}
-          </p>
+          <LongText text={message.reasoning}>
+            {(text) => (
+              <p className={cn(plainTextClassName, 'text-muted-foreground')}>
+                {text}
+              </p>
+            )}
+          </LongText>
         </CollapsibleSection>
       )}
 
-      {message.content && message.role === 'assistant' && (
-        <Suspense
-          fallback={<p className={plainTextClassName}>{message.content}</p>}
-        >
-          <AssistantMarkdown breaks>{message.content}</AssistantMarkdown>
-        </Suspense>
-      )}
-      {message.content && message.role !== 'assistant' && (
-        <p className={plainTextClassName}>{message.content}</p>
+      {message.content && (
+        <LongText text={message.content}>
+          {(text, isComplete) =>
+            // Markdown is only worth its cost for a complete assistant answer;
+            // a cut-off head could also end inside a code fence.
+            message.role === 'assistant' && isComplete ? (
+              <Suspense fallback={<p className={plainTextClassName}>{text}</p>}>
+                <AssistantMarkdown breaks>{text}</AssistantMarkdown>
+              </Suspense>
+            ) : (
+              <p className={plainTextClassName}>{text}</p>
+            )
+          }
+        </LongText>
       )}
 
       {images.length > 0 && (

@@ -18,12 +18,14 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useQuery } from '@tanstack/react-query'
 import { MessagesSquare } from 'lucide-react'
+import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Dialog } from '@/components/dialog'
 import { EmptyState } from '@/components/empty-state'
 import { ErrorState } from '@/components/error-state'
 import { LoadingState } from '@/components/loading-state'
+import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import {
   getServerErrorMessage,
@@ -34,6 +36,7 @@ import { getChatlogRecord } from './api'
 import { ConversationMessage } from './conversation-message'
 import { ConversationMeta } from './conversation-meta'
 import { ConversationRaw } from './conversation-raw'
+import { EARLIER_MESSAGES_STEP, latestTurnStart } from './conversation-window'
 import { withOccurrenceKeys } from './occurrence-keys'
 import './i18n'
 import type { ChatlogRecord } from './types'
@@ -50,7 +53,20 @@ function ConversationRecord(props: {
   isAdmin: boolean
 }) {
   const { t } = useTranslation()
-  const messages = props.record.messages ?? []
+  const messages = useMemo(
+    () =>
+      withOccurrenceKeys(
+        props.record.messages ?? [],
+        (message) =>
+          `${message.role}:${message.source}:${(message.content ?? '').slice(0, 48)}`
+      ),
+    [props.record.messages]
+  )
+  // Long agent histories open at their latest turn; see latestTurnStart.
+  const [start, setStart] = useState(() =>
+    latestTurnStart(props.record.messages ?? [])
+  )
+  const revealCount = Math.min(EARLIER_MESSAGES_STEP, start)
 
   return (
     <div className='min-w-0 space-y-3'>
@@ -66,11 +82,21 @@ function ConversationRecord(props: {
               {t('No parsed messages. Check the Raw JSON tab.')}
             </p>
           )}
-          {withOccurrenceKeys(
-            messages,
-            (message) =>
-              `${message.role}:${message.source}:${(message.content ?? '').slice(0, 48)}`
-          ).map((message) => (
+          {start > 0 && (
+            <Button
+              type='button'
+              variant='outline'
+              size='sm'
+              className='w-full'
+              onClick={() => setStart(start - revealCount)}
+            >
+              {t('Show {{shown}} earlier messages ({{hidden}} hidden)', {
+                shown: revealCount,
+                hidden: start,
+              })}
+            </Button>
+          )}
+          {messages.slice(start).map((message) => (
             <ConversationMessage key={message.key} message={message.item} />
           ))}
         </TabsContent>
