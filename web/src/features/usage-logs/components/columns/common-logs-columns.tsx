@@ -53,6 +53,7 @@ import { formatLogQuota, formatTimestampToDate } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { useSystemConfigStore } from '@/stores/system-config-store'
 
+import { ConversationButton } from '../../chatlog/conversation-button'
 import { LOG_TYPE_ALL_VALUE } from '../../constants'
 import type { UsageLog } from '../../data/schema'
 import {
@@ -888,6 +889,20 @@ export function useCommonLogsColumns(
         maxSize: 200,
       }
     )
+
+    columns.push({
+      id: 'conversation',
+      header: t('Conversation'),
+      cell: ({ row }) => (
+        <ConversationButton
+          requestId={row.original.request_id}
+          logType={row.original.type}
+          isAdmin={isAdmin}
+        />
+      ),
+      meta: { label: t('Conversation') },
+      size: 80,
+    })
 
     return columns
     // Log formatters read currency settings from the store.
