@@ -16,6 +16,14 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import {
+  Clock,
+  KeyRound,
+  Timer,
+  User,
+  Waypoints,
+  type LucideIcon,
+} from 'lucide-react'
 import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -26,9 +34,18 @@ import { formatNumber, formatTimestamp } from '@/lib/format'
 import type { ChatlogRecord } from './types'
 import './i18n'
 
-function MetaItem(props: { label: string; children: ReactNode }) {
+function MetaItem(props: {
+  icon: LucideIcon
+  label: string
+  children: ReactNode
+}) {
+  const Icon = props.icon
   return (
-    <div className='flex min-w-0 items-baseline gap-1.5'>
+    <div className='flex min-w-0 items-center gap-1.5'>
+      <Icon
+        aria-hidden='true'
+        className='text-muted-foreground/70 size-3.5 shrink-0'
+      />
       <dt className='text-muted-foreground shrink-0'>{props.label}</dt>
       <dd className='min-w-0 font-medium [overflow-wrap:anywhere]'>
         {props.children}
@@ -47,8 +64,11 @@ export function ConversationMeta(props: {
   const isSuccess = record.status >= 200 && record.status < 300
 
   return (
-    <div className='space-y-2'>
-      <div className='flex flex-wrap items-center gap-1.5'>
+    <div className='bg-muted/40 space-y-2.5 rounded-lg border p-3'>
+      <div className='flex flex-wrap items-center gap-x-2 gap-y-1.5'>
+        <span className='min-w-0 font-mono text-sm font-semibold [overflow-wrap:anywhere]'>
+          {record.model}
+        </span>
         <StatusBadge
           label={String(record.status)}
           variant={isSuccess ? 'success' : 'danger'}
@@ -72,22 +92,23 @@ export function ConversationMeta(props: {
           />
         )}
       </div>
-      <dl className='grid grid-cols-1 gap-x-4 gap-y-1 text-xs sm:grid-cols-2'>
-        <MetaItem label={t('Model')}>
-          <span className='font-mono'>{record.model}</span>
-        </MetaItem>
-        <MetaItem label={t('Protocol')}>
+      <dl className='flex flex-wrap gap-x-5 gap-y-1.5 text-xs'>
+        <MetaItem icon={Waypoints} label={t('Protocol')}>
           <span className='font-mono'>{record.protocol}</span>
         </MetaItem>
-        <MetaItem label={t('Time')}>
+        <MetaItem icon={Clock} label={t('Time')}>
           {formatTimestamp(record.created_at)}
         </MetaItem>
-        <MetaItem label={t('Latency')}>
+        <MetaItem icon={Timer} label={t('Latency')}>
           {formatNumber(record.latency_ms, locale)} ms
         </MetaItem>
-        <MetaItem label={t('Token')}>{record.token_name || '-'}</MetaItem>
+        <MetaItem icon={KeyRound} label={t('Token')}>
+          {record.token_name || '-'}
+        </MetaItem>
         {props.isAdmin && (
-          <MetaItem label={t('Username')}>{record.username || '-'}</MetaItem>
+          <MetaItem icon={User} label={t('Username')}>
+            {record.username || '-'}
+          </MetaItem>
         )}
       </dl>
     </div>

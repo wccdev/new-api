@@ -59,8 +59,8 @@ export function ConversationButton(props: ConversationButtonProps) {
             <Button
               type='button'
               variant='ghost'
-              size='icon-xs'
-              className='text-muted-foreground hover:text-foreground'
+              size='icon-sm'
+              className='text-foreground/70 hover:text-foreground'
               aria-label={t('View conversation')}
               onClick={() => {
                 setMounted(true)

@@ -31,7 +31,9 @@ import {
 import { cn } from '@/lib/utils'
 
 import { ImageDialog } from '../components/dialogs/image-dialog'
+import { Highlighted } from './conversation-highlight'
 import { LongText } from './conversation-long-text'
+import { firstMatchIndex } from './conversation-search'
 import { withOccurrenceKeys } from './occurrence-keys'
 import './i18n'
 import type { ChatlogMessage, ChatlogRole, ChatlogToolCall } from './types'
@@ -44,12 +46,24 @@ const AssistantMarkdown = lazy(() =>
 
 const ROLE_CONFIG: Record<
   ChatlogRole,
-  { labelKey: string; variant: StatusBadgeProps['variant'] }
+  { labelKey: string; variant: StatusBadgeProps['variant']; accent: string }
 > = {
-  system: { labelKey: 'System', variant: 'neutral' },
-  user: { labelKey: 'User', variant: 'info' },
-  assistant: { labelKey: 'Assistant', variant: 'success' },
-  tool: { labelKey: 'Tool', variant: 'warning' },
+  system: {
+    labelKey: 'System',
+    variant: 'neutral',
+    accent: 'border-l-slate-400/70',
+  },
+  user: { labelKey: 'User', variant: 'info', accent: 'border-l-sky-500/70' },
+  assistant: {
+    labelKey: 'Assistant',
+    variant: 'success',
+    accent: 'border-l-emerald-500/70',
+  },
+  tool: {
+    labelKey: 'Tool',
+    variant: 'warning',
+    accent: 'border-l-amber-500/70',
+  },
 }
 
 const plainTextClassName =
@@ -65,9 +79,13 @@ function formatToolArguments(value: string): string {
   }
 }
 
-function CollapsibleSection(props: { title: ReactNode; children: ReactNode }) {
+function CollapsibleSection(props: {
+  title: ReactNode
+  defaultOpen?: boolean
+  children: ReactNode
+}) {
   return (
-    <Collapsible className='min-w-0'>
+    <Collapsible className='min-w-0' defaultOpen={props.defaultOpen}>
       <CollapsibleTrigger className='group/section text-muted-foreground hover:text-foreground focus-visible:ring-ring/50 flex max-w-full items-center gap-1 rounded-sm text-xs font-medium outline-none focus-visible:ring-[3px]'>
         <ChevronRight
           aria-hidden='true'
@@ -82,15 +100,20 @@ function CollapsibleSection(props: { title: ReactNode; children: ReactNode }) {
   )
 }
 
-function ToolCallSection(props: { toolCall: ChatlogToolCall }) {
+function ToolCallSection(props: { toolCall: ChatlogToolCall; query: string }) {
   const { t } = useTranslation()
+  const argumentsText = formatToolArguments(props.toolCall.arguments)
+  const hit =
+    firstMatchIndex(props.toolCall.name, props.query) >= 0 ||
+    firstMatchIndex(argumentsText, props.query) >= 0
   return (
     <CollapsibleSection
+      defaultOpen={hit}
       title={
         <>
           {t('Tool call')}
           <span className='text-foreground ml-1.5 font-mono'>
-            {props.toolCall.name}
+            <Highlighted text={props.toolCall.name} query={props.query} />
           </span>
         </>
       }
@@ -101,8 +124,15 @@ function ToolCallSection(props: { toolCall: ChatlogToolCall }) {
             {props.toolCall.id}
           </p>
         )}
-        <LongText text={formatToolArguments(props.toolCall.arguments)}>
-          {(text) => <pre className={codeBlockClassName}>{text}</pre>}
+        <LongText
+          text={argumentsText}
+          focusIndex={firstMatchIndex(argumentsText, props.query)}
+        >
+          {(text) => (
+            <pre className={codeBlockClassName}>
+              <Highlighted text={text} query={props.query} />
+            </pre>
+          )}
         </LongText>
       </div>
     </CollapsibleSection>
@@ -144,9 +174,16 @@ function isDisplayableImage(src: string): boolean {
   return /^(https?:\/\/|data:image\/)/i.test(src)
 }
 
-export function ConversationMessage(props: { message: ChatlogMessage }) {
+export function ConversationMessage(props: {
+  message: ChatlogMessage
+  /** 1-based position in the whole conversation. */
+  number: number
+  query?: string
+}) {
   const { t } = useTranslation()
   const message = props.message
+  const query = props.query ?? ''
+  const isSearching = query.trim() !== ''
   const role = ROLE_CONFIG[message.role] ?? ROLE_CONFIG.user
   const isResponse = message.source === 'response'
   const images = (message.images ?? []).filter(isDisplayableImage)
@@ -155,8 +192,9 @@ export function ConversationMessage(props: { message: ChatlogMessage }) {
     <article
       data-source={message.source}
       className={cn(
-        'min-w-0 space-y-2 rounded-lg border p-3',
-        isResponse ? 'border-primary/40 bg-primary/5' : 'bg-card'
+        'min-w-0 space-y-2 rounded-lg border border-l-[3px] p-3 shadow-xs',
+        role.accent,
+        isResponse ? 'bg-primary/5' : 'bg-card'
       )}
     >
       <header className='flex items-center gap-1.5'>
@@ -174,6 +212,9 @@ export function ConversationMessage(props: { message: ChatlogMessage }) {
             copyable={false}
           />
         )}
+        <span className='text-muted-foreground/70 font-mono text-[11px] tabular-nums'>
+          #{props.number}
+        </span>
         {message.content && (
           <CopyButton
             value={message.content}
@@ -187,16 +228,24 @@ export function ConversationMessage(props: { message: ChatlogMessage }) {
       {message.tool_call_id && (
         <p className='text-muted-foreground text-xs'>
           {t('Tool call ID')}:{' '}
-          <span className='font-mono break-all'>{message.tool_call_id}</span>
+          <span className='font-mono break-all'>
+            <Highlighted text={message.tool_call_id} query={query} />
+          </span>
         </p>
       )}
 
       {message.reasoning && (
-        <CollapsibleSection title={t('Reasoning')}>
-          <LongText text={message.reasoning}>
+        <CollapsibleSection
+          title={t('Reasoning')}
+          defaultOpen={firstMatchIndex(message.reasoning, query) >= 0}
+        >
+          <LongText
+            text={message.reasoning}
+            focusIndex={firstMatchIndex(message.reasoning, query)}
+          >
             {(text) => (
               <p className={cn(plainTextClassName, 'text-muted-foreground')}>
-                {text}
+                <Highlighted text={text} query={query} />
               </p>
             )}
           </LongText>
@@ -204,16 +253,28 @@ export function ConversationMessage(props: { message: ChatlogMessage }) {
       )}
 
       {message.content && (
-        <LongText text={message.content}>
+        <LongText
+          text={message.content}
+          focusIndex={firstMatchIndex(message.content, query)}
+        >
           {(text, isComplete) =>
             // Markdown is only worth its cost for a complete assistant answer;
-            // a cut-off head could also end inside a code fence.
-            message.role === 'assistant' && isComplete ? (
+            // a cut-off head could also end inside a code fence. Search results
+            // stay plain text so that matches can be marked.
+            message.role === 'assistant' && isComplete && !isSearching ? (
               <Suspense fallback={<p className={plainTextClassName}>{text}</p>}>
                 <AssistantMarkdown breaks>{text}</AssistantMarkdown>
               </Suspense>
             ) : (
-              <p className={plainTextClassName}>{text}</p>
+              // Tool results are mostly terminal output and file contents.
+              <p
+                className={cn(
+                  plainTextClassName,
+                  message.role === 'tool' && 'font-mono text-xs'
+                )}
+              >
+                <Highlighted text={text} query={query} />
+              </p>
             )
           }
         </LongText>
@@ -237,7 +298,11 @@ export function ConversationMessage(props: { message: ChatlogMessage }) {
         message.tool_calls ?? [],
         (toolCall) => toolCall.id ?? toolCall.name
       ).map((toolCall) => (
-        <ToolCallSection key={toolCall.key} toolCall={toolCall.item} />
+        <ToolCallSection
+          key={toolCall.key}
+          toolCall={toolCall.item}
+          query={query}
+        />
       ))}
     </article>
   )

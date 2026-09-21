@@ -890,7 +890,8 @@ export function useCommonLogsColumns(
       }
     )
 
-    columns.push({
+    // Right after the time column, so it is reachable without scrolling.
+    columns.splice(1, 0, {
       id: 'conversation',
       header: t('Conversation'),
       cell: ({ row }) => (
@@ -901,7 +902,7 @@ export function useCommonLogsColumns(
         />
       ),
       meta: { label: t('Conversation') },
-      size: 80,
+      size: 64,
     })
 
     return columns

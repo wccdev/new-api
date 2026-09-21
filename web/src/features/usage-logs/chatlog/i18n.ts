@@ -27,6 +27,9 @@ type ChatlogTranslations = Record<string, string>
 
 export const chatlogResources: Record<string, ChatlogTranslations> = {
   en: {
+    'Search in conversation': 'Search in conversation',
+    'Filter by role': 'Filter by role',
+    '{{matched}} of {{total}} messages': '{{matched}} of {{total}} messages',
     'View conversation': 'View conversation',
     Conversation: 'Conversation',
     'View the full conversation recorded for this request':
@@ -59,6 +62,10 @@ export const chatlogResources: Record<string, ChatlogTranslations> = {
     'Download response JSON': 'Download response JSON',
   },
   zhCN: {
+    'Search in conversation': '在对话中搜索',
+    'Filter by role': '按角色筛选',
+    '{{matched}} of {{total}} messages':
+      '共 {{total}} 条消息，匹配 {{matched}} 条',
     'View conversation': '查看对话',
     Conversation: '对话',
     'View the full conversation recorded for this request':
@@ -89,6 +96,10 @@ export const chatlogResources: Record<string, ChatlogTranslations> = {
     'Download response JSON': '下载响应 JSON',
   },
   zhTW: {
+    'Search in conversation': '在對話中搜尋',
+    'Filter by role': '依角色篩選',
+    '{{matched}} of {{total}} messages':
+      '共 {{total}} 則訊息，符合 {{matched}} 則',
     'View conversation': '檢視對話',
     Conversation: '對話',
     'View the full conversation recorded for this request':
@@ -119,6 +130,9 @@ export const chatlogResources: Record<string, ChatlogTranslations> = {
     'Download response JSON': '下載回應 JSON',
   },
   fr: {
+    'Search in conversation': 'Rechercher dans la conversation',
+    'Filter by role': 'Filtrer par rôle',
+    '{{matched}} of {{total}} messages': '{{matched}} messages sur {{total}}',
     'View conversation': 'Voir la conversation',
     Conversation: 'Conversation',
     'View the full conversation recorded for this request':
@@ -151,6 +165,9 @@ export const chatlogResources: Record<string, ChatlogTranslations> = {
     'Download response JSON': 'Télécharger le JSON de la réponse',
   },
   ru: {
+    'Search in conversation': 'Поиск по диалогу',
+    'Filter by role': 'Фильтр по роли',
+    '{{matched}} of {{total}} messages': '{{matched}} из {{total}} сообщений',
     'View conversation': 'Просмотреть диалог',
     Conversation: 'Диалог',
     'View the full conversation recorded for this request':
@@ -183,6 +200,10 @@ export const chatlogResources: Record<string, ChatlogTranslations> = {
     'Download response JSON': 'Скачать JSON ответа',
   },
   ja: {
+    'Search in conversation': '会話内を検索',
+    'Filter by role': 'ロールで絞り込み',
+    '{{matched}} of {{total}} messages':
+      '{{total}} 件中 {{matched}} 件のメッセージ',
     'View conversation': '会話を表示',
     Conversation: '会話',
     'View the full conversation recorded for this request':
@@ -215,6 +236,9 @@ export const chatlogResources: Record<string, ChatlogTranslations> = {
     'Download response JSON': 'レスポンス JSON をダウンロード',
   },
   vi: {
+    'Search in conversation': 'Tìm trong hội thoại',
+    'Filter by role': 'Lọc theo vai trò',
+    '{{matched}} of {{total}} messages': '{{matched}} trên {{total}} tin nhắn',
     'View conversation': 'Xem hội thoại',
     Conversation: 'Hội thoại',
     'View the full conversation recorded for this request':

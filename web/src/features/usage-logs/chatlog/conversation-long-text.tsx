@@ -27,12 +27,15 @@ import './i18n'
 
 /** Messages longer than this open collapsed to keep long agent contexts light. */
 export const LONG_TEXT_LIMIT = 2000
+const EXCERPT_LEAD = 200
 
 interface LongTextProps {
   text: string
   /** Renders the visible text; receives the head while collapsed. */
   children: (text: string, isComplete: boolean) => ReactNode
   limit?: number
+  /** While collapsed, show the text around this position instead of its head. */
+  focusIndex?: number
 }
 
 /**
@@ -47,11 +50,20 @@ export function LongText(props: LongTextProps) {
   if (props.text.length <= limit) return <>{props.children(props.text, true)}</>
 
   const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
+  const focus = props.focusIndex ?? -1
+  // Keep some context before a search hit that lies beyond the head.
+  const excerptStart = focus > limit / 2 ? focus - EXCERPT_LEAD : 0
+  const excerptEnd = Math.min(excerptStart + limit, props.text.length)
+  const excerpt = [
+    excerptStart > 0 ? '…' : '',
+    props.text.slice(excerptStart, excerptEnd),
+    excerptEnd < props.text.length ? '…' : '',
+  ].join('')
   return (
     <div className='min-w-0 space-y-1'>
       {expanded
         ? props.children(props.text, true)
-        : props.children(`${props.text.slice(0, limit)}…`, false)}
+        : props.children(excerpt, false)}
       <Button
         type='button'
         variant='link'
