@@ -156,3 +156,94 @@ func TestGcworkControlPlaneEndpoints(t *testing.T) {
 		assert.True(t, call(writer, http.MethodDelete, path, "").Success)
 	})
 }
+
+func TestGcworkEnsureUserMatchesCasdoorBindings(t *testing.T) {
+	admin, _ := setupAccessTokenAudit(t)
+	require.NoError(t, model.DB.AutoMigrate(&model.CustomOAuthProvider{}))
+	sqlDB, err := model.DB.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(1)
+	office := model.CustomOAuthProvider{Name: "Casdoor office", Slug: "casdoor-oa"}
+	research := model.CustomOAuthProvider{Name: "Casdoor research", Slug: "casdoor-rd"}
+	require.NoError(t, model.DB.Create(&office).Error)
+	require.NoError(t, model.DB.Create(&research).Error)
+	t.Setenv("GCWORK_OAUTH_PROVIDERS", "casdoor-oa, casdoor-rd")
+	router := newGcworkTestRouter()
+	writer, _ := createScopedAccessToken(t, admin.Id, time.Now().Add(time.Hour).Unix(), "user:write")
+	createUser := func(username string) model.User {
+		user := model.User{Username: username, DisplayName: username, Role: common.RoleCommonUser, Status: common.UserStatusEnabled, AffCode: username}
+		require.NoError(t, model.DB.Create(&user).Error)
+		return user
+	}
+	bind := func(user model.User, provider model.CustomOAuthProvider, subject string) {
+		require.NoError(t, model.DB.Create(&model.UserOAuthBinding{UserId: user.Id, ProviderId: provider.Id, ProviderUserId: subject}).Error)
+	}
+	ensure := func(subject, username string) (int, bool) {
+		response := accessTokenRequest(router, http.MethodPost, "/api/gcwork/users/ensure", writer, "",
+			fmt.Sprintf(`{"external_id":%q,"username":%q}`, subject, username))
+		require.Equal(t, http.StatusOK, response.Code)
+		var payload tokenAPIResponse
+		require.NoError(t, common.Unmarshal(response.Body.Bytes(), &payload))
+		var data struct {
+			ID int `json:"id"`
+		}
+		if payload.Success {
+			require.NoError(t, common.Unmarshal(payload.Data, &data))
+		}
+		return data.ID, payload.Success
+	}
+	bindings := func(subject string) []model.UserOAuthBinding {
+		var found []model.UserOAuthBinding
+		require.NoError(t, model.DB.Where("provider_user_id = ?", subject).Find(&found).Error)
+		return found
+	}
+
+	t.Run("returns the user bound through any configured provider", func(t *testing.T) {
+		user := createUser("A0001")
+		bind(user, research, "sub-1")
+		id, ok := ensure("sub-1", "A0001")
+		require.True(t, ok)
+		assert.Equal(t, user.Id, id)
+	})
+
+	t.Run("adopts an unbound user with the Casdoor username once", func(t *testing.T) {
+		user := createUser("A0002")
+		id, ok := ensure("sub-2", "A0002")
+		require.True(t, ok)
+		assert.Equal(t, user.Id, id)
+		require.Len(t, bindings("sub-2"), 1)
+		assert.Equal(t, office.Id, bindings("sub-2")[0].ProviderId)
+		again, ok := ensure("sub-2", "A0002")
+		require.True(t, ok)
+		assert.Equal(t, user.Id, again)
+	})
+
+	t.Run("does not adopt a user bound to another subject", func(t *testing.T) {
+		user := createUser("A0003")
+		bind(user, office, "someone-else")
+		id, ok := ensure("sub-3", "A0003")
+		require.True(t, ok)
+		assert.NotEqual(t, user.Id, id)
+		created, err := model.GetUserById(id, false)
+		require.NoError(t, err)
+		assert.True(t, strings.HasPrefix(created.Username, "gcw_"))
+		assert.Empty(t, created.OidcId)
+	})
+
+	t.Run("creates a new user bound to the first provider", func(t *testing.T) {
+		id, ok := ensure("sub-4", "A0004")
+		require.True(t, ok)
+		created, err := model.GetUserById(id, false)
+		require.NoError(t, err)
+		assert.Equal(t, "A0004", created.Username)
+		require.Len(t, bindings("sub-4"), 1)
+		assert.Equal(t, id, bindings("sub-4")[0].UserId)
+		assert.Equal(t, office.Id, bindings("sub-4")[0].ProviderId)
+	})
+
+	t.Run("refuses an unknown provider slug", func(t *testing.T) {
+		t.Setenv("GCWORK_OAUTH_PROVIDERS", "missing")
+		_, ok := ensure("sub-5", "A0005")
+		assert.False(t, ok)
+	})
+}

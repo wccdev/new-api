@@ -4,7 +4,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
+	"os"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/QuantumNous/new-api/common"
@@ -25,8 +28,7 @@ import (
 const gcworkExternalIDMaxLength = 128
 
 // gcworkEnsureLock serializes provisioning on this node; across nodes the
-// unique username index decides, because every request for one external ID
-// tries the same username candidates in the same order.
+// unique OAuth binding and username indexes decide.
 var gcworkEnsureLock sync.Mutex
 
 type gcworkEnsureUserRequest struct {
@@ -36,23 +38,84 @@ type gcworkEnsureUserRequest struct {
 	Email       string `json:"email"`
 }
 
+// gcworkOAuthProviders resolves GCWORK_OAUTH_PROVIDERS, the comma-separated
+// slugs of the custom OAuth providers that sign users in through the same
+// Casdoor as GC Work. The first one receives the binding of a new user.
+func gcworkOAuthProviders() ([]*model.CustomOAuthProvider, error) {
+	providers := []*model.CustomOAuthProvider{}
+	for slug := range strings.SplitSeq(os.Getenv("GCWORK_OAUTH_PROVIDERS"), ",") {
+		if slug = strings.TrimSpace(slug); slug == "" {
+			continue
+		}
+		provider, err := model.GetCustomOAuthProviderBySlug(slug)
+		if err != nil {
+			return nil, fmt.Errorf("GCWORK_OAUTH_PROVIDERS names unknown provider %q: %w", slug, err)
+		}
+		providers = append(providers, provider)
+	}
+	return providers, nil
+}
+
 // GcworkEnsureUser returns the user bound to a Casdoor subject, creating it in
-// the default group with the default quota on first use. The subject is stored
-// as the OIDC id, so NewAPI's own OIDC sign-in against the same Casdoor issuer
-// reaches the same account.
+// the default group with the default quota on first use. With
+// GCWORK_OAUTH_PROVIDERS set, the subject is matched against those providers'
+// bindings, an unbound user whose username equals the Casdoor username is
+// adopted, and a new user gets a binding to the first provider, so NewAPI web
+// sign-in through Casdoor reaches the same account. Without it, the subject is
+// stored as the OIDC id.
 func GcworkEnsureUser(c *gin.Context) {
 	var req gcworkEnsureUserRequest
 	if err := common.DecodeJson(c.Request.Body, &req); err != nil || req.ExternalID == "" || len(req.ExternalID) > gcworkExternalIDMaxLength {
 		common.ApiErrorT(c, "Invalid parameters")
 		return
 	}
+	providers, err := gcworkOAuthProviders()
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
 	gcworkEnsureLock.Lock()
 	defer gcworkEnsureLock.Unlock()
 
-	if user, err := gcworkUserByExternalID(req.ExternalID); err != nil || user != nil {
+	if user, err := gcworkUserByExternalID(providers, req.ExternalID); err != nil || user != nil {
 		gcworkEnsureResult(c, user, err)
 		return
 	}
+	if len(providers) > 0 && req.Username != "" {
+		var existing model.User
+		err := model.DB.Where("username = ?", req.Username).First(&existing).Error
+		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			common.ApiError(c, err)
+			return
+		}
+		if err == nil && existing.OidcId == "" && existing.Role < common.RoleAdminUser {
+			var bound int64
+			ids := make([]int, len(providers))
+			for i, provider := range providers {
+				ids[i] = provider.Id
+			}
+			if err := model.DB.Model(&model.UserOAuthBinding{}).Where("user_id = ? AND provider_id IN ?", existing.Id, ids).Count(&bound).Error; err != nil {
+				common.ApiError(c, err)
+				return
+			}
+			if bound == 0 {
+				binding := model.UserOAuthBinding{UserId: existing.Id, ProviderId: providers[0].Id, ProviderUserId: req.ExternalID}
+				if err := model.CreateUserOAuthBinding(&binding); err != nil {
+					// Another node may have bound the subject meanwhile.
+					user, lookupErr := gcworkUserByExternalID(providers, req.ExternalID)
+					if lookupErr == nil && user == nil {
+						lookupErr = err
+					}
+					gcworkEnsureResult(c, user, lookupErr)
+					return
+				}
+				recordManageAuditFor(c, existing.Id, "gcwork.user.adopt", map[string]any{"id": existing.Id, "username": existing.Username, "provider": providers[0].Slug})
+				common.ApiSuccess(c, gin.H{"id": existing.Id})
+				return
+			}
+		}
+	}
+
 	candidates := []string{}
 	if req.Username != "" && len(req.Username) <= model.UserNameMaxLength {
 		candidates = append(candidates, req.Username)
@@ -74,14 +137,25 @@ func GcworkEnsureUser(c *gin.Context) {
 			Username:    username,
 			DisplayName: string(displayName[:min(len(displayName), 20)]),
 			Email:       email,
-			OidcId:      req.ExternalID,
 			Role:        common.RoleCommonUser,
 			Status:      common.UserStatusEnabled,
 		}
-		insertErr = model.DB.Transaction(func(tx *gorm.DB) error { return user.InsertWithTx(tx, 0) })
+		if len(providers) == 0 {
+			user.OidcId = req.ExternalID
+		}
+		insert := func(tx *gorm.DB) error {
+			if err := user.InsertWithTx(tx, 0); err != nil {
+				return err
+			}
+			if len(providers) == 0 {
+				return nil
+			}
+			return model.CreateUserOAuthBindingWithTx(tx, &model.UserOAuthBinding{UserId: user.Id, ProviderId: providers[0].Id, ProviderUserId: req.ExternalID})
+		}
+		insertErr = model.DB.Transaction(insert)
 		if errors.Is(insertErr, model.ErrEmailAlreadyTaken) {
-			user.Email, email = "", ""
-			insertErr = model.DB.Transaction(func(tx *gorm.DB) error { return user.InsertWithTx(tx, 0) })
+			user.Id, user.Email, email = 0, "", ""
+			insertErr = model.DB.Transaction(insert)
 		}
 		if insertErr == nil {
 			user.FinalizeOAuthUserCreation(0)
@@ -89,16 +163,28 @@ func GcworkEnsureUser(c *gin.Context) {
 			common.ApiSuccess(c, gin.H{"id": user.Id})
 			return
 		}
-		// Another node may have created the user with this candidate meanwhile.
-		if existing, err := gcworkUserByExternalID(req.ExternalID); err != nil || existing != nil {
+		// Another node may have created the user meanwhile.
+		if existing, err := gcworkUserByExternalID(providers, req.ExternalID); err != nil || existing != nil {
 			gcworkEnsureResult(c, existing, err)
 			return
 		}
+		user.Id = 0
 	}
 	common.ApiError(c, insertErr)
 }
 
-func gcworkUserByExternalID(externalID string) (*model.User, error) {
+// gcworkUserByExternalID finds the user bound to a Casdoor subject through the
+// configured providers' OAuth bindings, then through the OIDC id.
+func gcworkUserByExternalID(providers []*model.CustomOAuthProvider, externalID string) (*model.User, error) {
+	for _, provider := range providers {
+		user, err := model.GetUserByOAuthBinding(provider.Id, externalID)
+		if err == nil {
+			return user, nil
+		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, err
+		}
+	}
 	var user model.User
 	err := model.DB.Where("oidc_id = ?", externalID).Order("id").First(&user).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
