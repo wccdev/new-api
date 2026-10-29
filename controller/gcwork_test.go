@@ -104,10 +104,14 @@ func TestGcworkControlPlaneEndpoints(t *testing.T) {
 		assert.Empty(t, user.Email)
 	})
 
-	t.Run("ensure refuses a subject bound to an administrator", func(t *testing.T) {
+	root := model.User{Username: "gcwork-root", Role: common.RoleRootUser, Status: common.UserStatusEnabled, AffCode: "gcwork-root", OidcId: "casdoor-root"}
+	require.NoError(t, model.DB.Create(&root).Error)
+	t.Run("ensure returns an administrator but refuses the root user", func(t *testing.T) {
 		require.NoError(t, model.DB.Model(admin).Update("oidc_id", "casdoor-admin").Error)
-		payload := call(writer, http.MethodPost, "/api/gcwork/users/ensure", `{"external_id":"casdoor-admin","username":"root2"}`)
-		assert.False(t, payload.Success)
+		payload := call(writer, http.MethodPost, "/api/gcwork/users/ensure", `{"external_id":"casdoor-admin","username":"admin2"}`)
+		require.True(t, payload.Success, payload.Message)
+		assert.JSONEq(t, fmt.Sprintf(`{"id":%d}`, admin.Id), string(payload.Data))
+		assert.False(t, call(writer, http.MethodPost, "/api/gcwork/users/ensure", `{"external_id":"casdoor-root","username":"root2"}`).Success)
 	})
 
 	var tokenID int
@@ -128,9 +132,10 @@ func TestGcworkControlPlaneEndpoints(t *testing.T) {
 		tokenID = data.ID
 	})
 
-	t.Run("refuses tokens for administrators and past expiry times", func(t *testing.T) {
+	t.Run("issues tokens to administrators, not to the root user or with past expiry times", func(t *testing.T) {
 		valid := `{"name":"x","expired_time":-1,"unlimited_quota":true}`
-		assert.False(t, call(writer, http.MethodPost, fmt.Sprintf("/api/gcwork/users/%d/tokens", admin.Id), valid).Success)
+		assert.True(t, call(writer, http.MethodPost, fmt.Sprintf("/api/gcwork/users/%d/tokens", admin.Id), valid).Success)
+		assert.False(t, call(writer, http.MethodPost, fmt.Sprintf("/api/gcwork/users/%d/tokens", root.Id), valid).Success)
 		expired := `{"name":"x","expired_time":1,"unlimited_quota":true}`
 		assert.False(t, call(writer, http.MethodPost, fmt.Sprintf("/api/gcwork/users/%d/tokens", userID), expired).Success)
 	})

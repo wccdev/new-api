@@ -21,9 +21,10 @@ import (
 
 // GC Work control plane endpoints. They are machine-to-machine calls made with
 // an administrator personal access token holding the user:write scope, so they
-// require no interactive security proof. They only act on common users: the
-// control plane never provisions, disables, or mints relay tokens for
-// administrators.
+// require no interactive security proof. Administrators use GC Work like other
+// employees and may receive relay tokens, which reach models only; enabling or
+// disabling users and adopting accounts by username stay limited to common
+// users, and the root user is never a target.
 
 const gcworkExternalIDMaxLength = 128
 
@@ -201,16 +202,16 @@ func gcworkEnsureResult(c *gin.Context, user *model.User, err error) {
 		common.ApiError(c, err)
 		return
 	}
-	if user.Role >= common.RoleAdminUser {
+	if user.Role >= common.RoleRootUser {
 		common.ApiErrorT(c, "No permission to update users of same or higher permission level")
 		return
 	}
 	common.ApiSuccess(c, gin.H{"id": user.Id})
 }
 
-// gcworkCommonUser loads the common user named by the :id path parameter, or
-// writes the error response and returns nil.
-func gcworkCommonUser(c *gin.Context) *model.User {
+// gcworkTargetUser loads the user named by the :id path parameter whose role
+// is below maxRole, or writes the error response and returns nil.
+func gcworkTargetUser(c *gin.Context, maxRole int) *model.User {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id <= 0 {
 		common.ApiErrorT(c, "Invalid parameters")
@@ -225,7 +226,7 @@ func gcworkCommonUser(c *gin.Context) *model.User {
 		}
 		return nil
 	}
-	if user.Role >= common.RoleAdminUser {
+	if user.Role >= maxRole {
 		common.ApiErrorT(c, "No permission to update users of same or higher permission level")
 		return nil
 	}
@@ -242,7 +243,7 @@ func GcworkSetUserStatus(c *gin.Context) {
 		common.ApiErrorT(c, "Invalid parameters")
 		return
 	}
-	user := gcworkCommonUser(c)
+	user := gcworkTargetUser(c, common.RoleAdminUser)
 	if user == nil {
 		return
 	}
@@ -268,7 +269,7 @@ type gcworkCreateTokenRequest struct {
 	UnlimitedQuota bool   `json:"unlimited_quota"`
 }
 
-// GcworkCreateToken creates a relay token owned by a common user, applying the
+// GcworkCreateToken creates a relay token owned by a non-root user, applying the
 // validation of the user-facing token API, and returns its full key once.
 func GcworkCreateToken(c *gin.Context) {
 	var req gcworkCreateTokenRequest
@@ -294,7 +295,7 @@ func GcworkCreateToken(c *gin.Context) {
 			return
 		}
 	}
-	user := gcworkCommonUser(c)
+	user := gcworkTargetUser(c, common.RoleRootUser)
 	if user == nil {
 		return
 	}
@@ -333,7 +334,7 @@ func GcworkCreateToken(c *gin.Context) {
 	common.ApiSuccess(c, gin.H{"id": token.Id, "key": "sk-" + key})
 }
 
-// GcworkDeleteToken deletes a relay token owned by a common user. A token that
+// GcworkDeleteToken deletes a relay token owned by a non-root user. A token that
 // no longer exists counts as deleted.
 func GcworkDeleteToken(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
@@ -351,7 +352,7 @@ func GcworkDeleteToken(c *gin.Context) {
 		return
 	}
 	var owner model.User
-	if err := model.DB.Unscoped().Select("id", "role").First(&owner, token.UserId).Error; err == nil && owner.Role >= common.RoleAdminUser {
+	if err := model.DB.Unscoped().Select("id", "role").First(&owner, token.UserId).Error; err == nil && owner.Role >= common.RoleRootUser {
 		common.ApiErrorT(c, "No permission to update users of same or higher permission level")
 		return
 	}
