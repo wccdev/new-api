@@ -44,6 +44,7 @@ import {
   ModelLimitsCell,
 } from './api-keys-cells'
 import { DataTableRowActions } from './data-table-row-actions'
+import { AppManagedBadge } from './gcwork-managed-key'
 
 const EMPTY_GROUP_RATIOS: Record<string, number | string> = {}
 
@@ -95,6 +96,7 @@ export function useApiKeysColumns(now: number): ColumnDef<ApiKey>[] {
           <Checkbox
             checked={row.getIsSelected()}
             onCheckedChange={(value) => row.toggleSelected(!!value)}
+            disabled={!row.getCanSelect()}
             aria-label={t('Select row')}
             className='translate-y-[2px]'
           />
@@ -107,7 +109,10 @@ export function useApiKeysColumns(now: number): ColumnDef<ApiKey>[] {
         accessorKey: 'name',
         header: t('Name'),
         cell: ({ row }) => (
-          <span className='font-medium'>{row.getValue('name')}</span>
+          <span className='inline-flex items-center gap-2'>
+            <span className='font-medium'>{row.getValue('name')}</span>
+            {row.original.app_managed && <AppManagedBadge />}
+          </span>
         ),
         size: 180,
         meta: { mobileTitle: true },

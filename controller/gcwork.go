@@ -334,6 +334,52 @@ func GcworkCreateToken(c *gin.Context) {
 	common.ApiSuccess(c, gin.H{"id": token.Id, "key": "sk-" + key})
 }
 
+// GcworkEnsureManagedToken returns the one permanent relay token GC Work manages
+// for a non-root user, creating it on first use. Every device of the user
+// receives the same key.
+func GcworkEnsureManagedToken(c *gin.Context) {
+	user := gcworkTargetUser(c, common.RoleRootUser)
+	if user == nil {
+		return
+	}
+	gcworkEnsureLock.Lock()
+	defer gcworkEnsureLock.Unlock()
+	token, err := model.EnsureGcworkManagedToken(user.Id)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, gin.H{"id": token.Id, "key": "sk-" + token.GetFullKey()})
+}
+
+// GcworkDeleteManagedToken deletes the managed token of a non-root user, so its
+// key stops working on every device. A user without one succeeds.
+func GcworkDeleteManagedToken(c *gin.Context) {
+	user := gcworkTargetUser(c, common.RoleRootUser)
+	if user == nil {
+		return
+	}
+	gcworkEnsureLock.Lock()
+	defer gcworkEnsureLock.Unlock()
+	if err := model.DeleteGcworkManagedToken(user.Id); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	recordManageAuditFor(c, user.Id, "gcwork.managed_token.delete", map[string]any{"user_id": user.Id})
+	common.ApiSuccess(c, nil)
+}
+
+// GcworkGetSelfManagedToken tells the console which of the signed-in user's
+// tokens GC Work manages; token_id is 0 when there is none.
+func GcworkGetSelfManagedToken(c *gin.Context) {
+	id, err := model.GcworkManagedTokenId(c.GetInt("id"))
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, gin.H{"token_id": id})
+}
+
 // GcworkDeleteToken deletes a relay token owned by a non-root user. A token that
 // no longer exists counts as deleted.
 func GcworkDeleteToken(c *gin.Context) {
