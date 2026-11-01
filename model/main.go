@@ -342,6 +342,7 @@ func migrateDB() error {
 	err := DB.AutoMigrate(
 		&Channel{},
 		&Token{},
+		&GcworkManagedToken{},
 		&User{},
 		&UserSession{},
 		&AuthFlow{},

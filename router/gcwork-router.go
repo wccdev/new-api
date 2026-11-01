@@ -13,7 +13,7 @@ import (
 const gcworkAccessTokenScope = "user:write"
 
 // SetGcworkRouter adds the GC Work control plane endpoints: provisioning
-// users by Casdoor subject and issuing per-device relay tokens for them.
+// users by Casdoor subject and managing their relay tokens.
 func SetGcworkRouter(router *gin.Engine) {
 	gcworkRouter := router.Group("/api/gcwork")
 	gcworkRouter.Use(middleware.RouteTag("api"))
@@ -21,6 +21,7 @@ func SetGcworkRouter(router *gin.Engine) {
 	gcworkRouter.Use(middleware.AccessTokenAudit())
 	gcworkRouter.Use(middleware.GlobalAPIRateLimit())
 	gcworkRouter.Use(middleware.DisableCache())
+	gcworkRouter.GET("/self/managed-token", middleware.UserAuth(), controller.GcworkGetSelfManagedToken)
 	gcworkRouter.Use(middleware.AdminAuth())
 	routes := []struct {
 		method  string
@@ -30,6 +31,8 @@ func SetGcworkRouter(router *gin.Engine) {
 		{"POST", "/users/ensure", controller.GcworkEnsureUser},
 		{"POST", "/users/:id/status", controller.GcworkSetUserStatus},
 		{"POST", "/users/:id/tokens", controller.GcworkCreateToken},
+		{"POST", "/users/:id/managed-token", controller.GcworkEnsureManagedToken},
+		{"DELETE", "/users/:id/managed-token", controller.GcworkDeleteManagedToken},
 		{"DELETE", "/tokens/:id", controller.GcworkDeleteToken},
 	}
 	for _, route := range routes {

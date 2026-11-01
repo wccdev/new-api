@@ -47,6 +47,7 @@ export const apiKeySchema = z.object({
   model_limits: z.string().nullish().default(''),
   allow_ips: z.string().nullish().default(''),
   allow_user_quota_query: z.boolean().optional().default(false),
+  app_managed: z.boolean().optional(),
 })
 
 export type ApiKey = z.infer<typeof apiKeySchema>

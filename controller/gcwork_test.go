@@ -11,6 +11,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -29,6 +30,8 @@ func newGcworkTestRouter() *gin.Engine {
 		{http.MethodPost, "/users/ensure", GcworkEnsureUser},
 		{http.MethodPost, "/users/:id/status", GcworkSetUserStatus},
 		{http.MethodPost, "/users/:id/tokens", GcworkCreateToken},
+		{http.MethodPost, "/users/:id/managed-token", GcworkEnsureManagedToken},
+		{http.MethodDelete, "/users/:id/managed-token", GcworkDeleteManagedToken},
 		{http.MethodDelete, "/tokens/:id", GcworkDeleteToken},
 	} {
 		middleware.DeclareAccessTokenScopeRoute(route.method, "/api/gcwork"+route.path, "user:write")
@@ -159,6 +162,148 @@ func TestGcworkControlPlaneEndpoints(t *testing.T) {
 		_, err := model.GetTokenById(tokenID)
 		require.Error(t, err)
 		assert.True(t, call(writer, http.MethodDelete, path, "").Success)
+	})
+}
+
+func TestGcworkManagedToken(t *testing.T) {
+	admin, _ := setupAccessTokenAudit(t)
+	require.NoError(t, model.DB.AutoMigrate(&model.Token{}, &model.GcworkManagedToken{}))
+	sqlDB, err := model.DB.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(1)
+	router := newGcworkTestRouter()
+	writer, _ := createScopedAccessToken(t, admin.Id, time.Now().Add(time.Hour).Unix(), "user:write")
+	user := model.User{Username: "managed", DisplayName: "managed", Role: common.RoleCommonUser, Status: common.UserStatusEnabled, AffCode: "managed"}
+	require.NoError(t, model.DB.Create(&user).Error)
+	path := fmt.Sprintf("/api/gcwork/users/%d/managed-token", user.Id)
+	type issued struct {
+		ID  int    `json:"id"`
+		Key string `json:"key"`
+	}
+	ensure := func() issued {
+		response := accessTokenRequest(router, http.MethodPost, path, writer, "", "")
+		var payload tokenAPIResponse
+		require.NoError(t, common.Unmarshal(response.Body.Bytes(), &payload))
+		require.True(t, payload.Success, payload.Message)
+		var data issued
+		require.NoError(t, common.Unmarshal(payload.Data, &data))
+		return data
+	}
+	deleteManaged := func() tokenAPIResponse {
+		response := accessTokenRequest(router, http.MethodDelete, path, writer, "", "")
+		var payload tokenAPIResponse
+		require.NoError(t, common.Unmarshal(response.Body.Bytes(), &payload))
+		return payload
+	}
+
+	t.Run("returns the same permanent key on every call, also under concurrency", func(t *testing.T) {
+		results := make([]issued, 8)
+		var wg sync.WaitGroup
+		for i := range results {
+			wg.Go(func() { results[i] = ensure() })
+		}
+		wg.Wait()
+		for _, result := range results {
+			assert.Equal(t, results[0], result)
+		}
+		assert.True(t, strings.HasPrefix(results[0].Key, "sk-"))
+		token, err := model.GetTokenById(results[0].ID)
+		require.NoError(t, err)
+		assert.Equal(t, int64(-1), token.ExpiredTime)
+		assert.True(t, token.UnlimitedQuota)
+		assert.Equal(t, model.GcworkManagedTokenName, token.Name)
+		count, err := model.CountUserTokens(user.Id)
+		require.NoError(t, err)
+		assert.Equal(t, int64(1), count)
+	})
+
+	t.Run("ignores the per-user token limit", func(t *testing.T) {
+		other := model.User{Username: "limited", DisplayName: "limited", Role: common.RoleCommonUser, Status: common.UserStatusEnabled, AffCode: "limited"}
+		require.NoError(t, model.DB.Create(&other).Error)
+		limit := operation_setting.GetTokenSetting().MaxUserTokens
+		operation_setting.GetTokenSetting().MaxUserTokens = 0
+		t.Cleanup(func() { operation_setting.GetTokenSetting().MaxUserTokens = limit })
+		token, err := model.EnsureGcworkManagedToken(other.Id)
+		require.NoError(t, err)
+		assert.Positive(t, token.Id)
+	})
+
+	t.Run("enables a disabled token again", func(t *testing.T) {
+		first := ensure()
+		require.NoError(t, model.DB.Model(&model.Token{}).Where("id = ?", first.ID).Update("status", common.TokenStatusDisabled).Error)
+		assert.Equal(t, first, ensure())
+		token, err := model.GetTokenById(first.ID)
+		require.NoError(t, err)
+		assert.Equal(t, common.TokenStatusEnabled, token.Status)
+	})
+
+	t.Run("the user can neither change the token nor read its key", func(t *testing.T) {
+		managed := ensure()
+		own := model.Token{UserId: user.Id, Name: "own", Key: "own-key-for-managed-test", ExpiredTime: -1}
+		require.NoError(t, own.Insert())
+		tokens := gin.New()
+		group := tokens.Group("/api/token", func(c *gin.Context) { c.Set("id", user.Id) }, middleware.TokenOperationAudit(), middleware.GcworkManagedTokenGuard())
+		group.GET("/:id", GetToken)
+		group.POST("/:id/key", GetTokenKey)
+		group.PUT("/", UpdateToken)
+		group.DELETE("/:id", DeleteToken)
+		group.POST("/batch", DeleteTokenBatch)
+		group.POST("/batch/keys", GetTokenKeysBatch)
+		request := func(method, target, body string) tokenAPIResponse {
+			response := accessTokenRequest(tokens, method, target, "unused", "", body)
+			var payload tokenAPIResponse
+			require.NoError(t, common.Unmarshal(response.Body.Bytes(), &payload), response.Body.String())
+			return payload
+		}
+		for _, attempt := range []struct{ method, target, body string }{
+			{http.MethodDelete, fmt.Sprintf("/api/token/%d", managed.ID), ""},
+			{http.MethodPost, fmt.Sprintf("/api/token/%d/key", managed.ID), ""},
+			{http.MethodPut, "/api/token/", fmt.Sprintf(`{"id":%d,"name":"renamed","expired_time":-1,"unlimited_quota":true}`, managed.ID)},
+			{http.MethodPut, "/api/token/?status_only=true", fmt.Sprintf(`{"id":%d,"status":2}`, managed.ID)},
+			{http.MethodPost, "/api/token/batch", fmt.Sprintf(`{"ids":[%d,%d]}`, own.Id, managed.ID)},
+			{http.MethodPost, "/api/token/batch/keys", fmt.Sprintf(`{"ids":[%d,%d]}`, own.Id, managed.ID)},
+		} {
+			payload := request(attempt.method, attempt.target, attempt.body)
+			assert.False(t, payload.Success, attempt.target)
+			assert.Contains(t, payload.Message, "managed by GC Work", attempt.target)
+		}
+		token, err := model.GetTokenById(managed.ID)
+		require.NoError(t, err)
+		assert.Equal(t, model.GcworkManagedTokenName, token.Name)
+		assert.Equal(t, common.TokenStatusEnabled, token.Status)
+		_, err = model.GetTokenById(own.Id)
+		require.NoError(t, err)
+
+		assert.True(t, request(http.MethodGet, fmt.Sprintf("/api/token/%d", managed.ID), "").Success)
+		assert.True(t, request(http.MethodPost, fmt.Sprintf("/api/token/%d/key", own.Id), "").Success)
+		assert.True(t, request(http.MethodPut, "/api/token/", fmt.Sprintf(`{"id":%d,"name":"renamed","expired_time":-1,"unlimited_quota":true}`, own.Id)).Success)
+		assert.True(t, request(http.MethodDelete, fmt.Sprintf("/api/token/%d", own.Id), "").Success)
+	})
+
+	t.Run("deleting stops the key and the next ensure issues another; deleting again succeeds", func(t *testing.T) {
+		first := ensure()
+		require.True(t, deleteManaged().Success)
+		_, err := model.GetTokenById(first.ID)
+		require.Error(t, err)
+		assert.True(t, deleteManaged().Success)
+		assert.NotEqual(t, first.Key, ensure().Key)
+	})
+
+	t.Run("replaces a marker whose token is gone", func(t *testing.T) {
+		first := ensure()
+		token, err := model.GetTokenById(first.ID)
+		require.NoError(t, err)
+		require.NoError(t, token.Delete())
+		assert.NotEqual(t, first.Key, ensure().Key)
+	})
+
+	t.Run("refuses the root user", func(t *testing.T) {
+		root := model.User{Username: "managed-root", DisplayName: "root", Role: common.RoleRootUser, Status: common.UserStatusEnabled, AffCode: "managed-root"}
+		require.NoError(t, model.DB.Create(&root).Error)
+		response := accessTokenRequest(router, http.MethodPost, fmt.Sprintf("/api/gcwork/users/%d/managed-token", root.Id), writer, "", "")
+		var payload tokenAPIResponse
+		require.NoError(t, common.Unmarshal(response.Body.Bytes(), &payload))
+		assert.False(t, payload.Success)
 	})
 }
 

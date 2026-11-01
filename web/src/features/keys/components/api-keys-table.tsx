@@ -63,6 +63,7 @@ import { useApiKeysColumns } from './api-keys-columns'
 import { useApiKeys } from './api-keys-provider'
 import { DataTableBulkActions } from './data-table-bulk-actions'
 import { DataTableRowActions } from './data-table-row-actions'
+import { AppManagedBadge } from './gcwork-managed-key'
 
 const route = getRouteApi('/_authenticated/keys/')
 const API_KEYS_COLUMN_VISIBILITY_STORAGE_KEY = 'api-keys:column-visibility'
@@ -157,6 +158,7 @@ function ApiKeysMobileList({
                 <div className='text-sm leading-5 font-semibold break-words'>
                   {apiKey.name}
                 </div>
+                {apiKey.app_managed && <AppManagedBadge />}
               </div>
               {statusConfig && (
                 <StatusBadge
@@ -307,7 +309,7 @@ export function ApiKeysTable() {
   const { table } = useDataTable({
     data: apiKeys,
     columns,
-    enableRowSelection: true,
+    enableRowSelection: (row) => !row.original.app_managed,
     columnFilters,
     columnVisibilityStorageKey: API_KEYS_COLUMN_VISIBILITY_STORAGE_KEY,
     globalFilter,

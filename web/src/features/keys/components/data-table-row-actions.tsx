@@ -58,6 +58,7 @@ import { updateApiKeyStatus } from '../api'
 import { API_KEY_STATUS, ERROR_MESSAGES, SUCCESS_MESSAGES } from '../constants'
 import { apiKeySchema } from '../types'
 import { useApiKeys } from './api-keys-provider'
+import { ManagedKeyActions } from './gcwork-managed-key'
 
 function getServerAddress(): string {
   try {
@@ -171,6 +172,8 @@ export function DataTableRowActions<TData>({
   } else if (isEnabled) {
     statusIcon = <PowerOff className='size-4' />
   }
+
+  if (apiKey.app_managed) return <ManagedKeyActions />
 
   return (
     <div className='-ml-1.5 flex items-center gap-1'>

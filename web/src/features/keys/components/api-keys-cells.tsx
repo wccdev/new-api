@@ -39,6 +39,7 @@ import { copyToClipboard } from '@/lib/copy-to-clipboard'
 
 import type { ApiKey } from '../types'
 import { useApiKeys } from './api-keys-provider'
+import { ManagedKeyValue } from './gcwork-managed-key'
 
 export function ApiKeyCell({ apiKey }: { apiKey: ApiKey }) {
   const { t } = useTranslation()
@@ -83,6 +84,8 @@ export function ApiKeyCell({ apiKey }: { apiKey: ApiKey }) {
     copyIcon = <Check className='size-3.5 text-green-600' />
     copyTooltip = t('Copied!')
   }
+
+  if (apiKey.app_managed) return <ManagedKeyValue />
 
   return (
     <div className='flex max-w-full min-w-0 items-center'>

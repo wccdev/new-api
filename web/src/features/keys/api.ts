@@ -18,6 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { api } from '@/lib/api'
 
+import { markManagedKey } from './gcwork-managed'
 import type {
   ApiKey,
   ApiResponse,
@@ -38,7 +39,7 @@ export async function getApiKeys(
 ): Promise<GetApiKeysResponse> {
   const { p = 1, size = 10 } = params
   const res = await api.get(`/api/token/?p=${p}&size=${size}`)
-  return res.data
+  return markManagedKey(res.data)
 }
 
 // Search API keys by keyword or token (with pagination)
@@ -52,7 +53,7 @@ export async function searchApiKeys(
   if (p != null) queryParams.set('p', String(p))
   if (size != null) queryParams.set('size', String(size))
   const res = await api.get(`/api/token/search?${queryParams.toString()}`)
-  return res.data
+  return markManagedKey(res.data)
 }
 
 // Get single API key by ID
