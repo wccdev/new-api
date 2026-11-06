@@ -900,8 +900,8 @@ export function useCommonLogsColumns(
       }
     )
 
-    // Right after the time column, so it is reachable without scrolling.
-    columns.splice(1, 0, {
+    // Just before the trailing details column.
+    columns.splice(columns.length - 1, 0, {
       id: 'conversation',
       header: t('Conversation'),
       cell: ({ row }) => (
