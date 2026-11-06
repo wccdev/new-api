@@ -264,13 +264,16 @@ func gcworkEmailOwner(groupIds []int, providerId int, email string) (*model.User
 }
 
 // linkGcworkOAuthLogin handles a web sign-in through one of the
-// GCWORK_OAUTH_PROVIDERS whose subject is not bound yet, linking it to the
-// account gcworkEmailOwner names. A nil user and error means the sign-in is not
-// such a case and registration proceeds as usual.
+// GCWORK_OAUTH_PROVIDERS whose subject is not bound to that provider yet. The
+// providers are applications of one Casdoor server, whose subjects are unique
+// across its organizations, and Casdoor may answer through one application
+// with the session of another; so the account the subject is bound to through
+// another of the providers signs in as is. Otherwise the subject is linked to
+// the account gcworkEmailOwner names. A nil user and error means the sign-in is
+// not such a case and registration proceeds as usual.
 func linkGcworkOAuthLogin(c *gin.Context, provider oauth.Provider, oauthUser *oauth.OAuthUser) (*model.User, error) {
 	generic, ok := provider.(*oauth.GenericOAuthProvider)
-	email := model.NormalizeEmail(oauthUser.Email)
-	if !ok || email == "" {
+	if !ok {
 		return nil, nil
 	}
 	providers, err := gcworkOAuthProviders()
@@ -281,6 +284,19 @@ func linkGcworkOAuthLogin(c *gin.Context, provider oauth.Provider, oauthUser *oa
 	providerId := generic.GetProviderId()
 	groupIds := gcworkProviderIds(providers)
 	if len(groupIds) < 2 || !slices.Contains(groupIds, providerId) {
+		return nil, nil
+	}
+	for _, id := range groupIds {
+		user, err := model.GetUserByOAuthBinding(id, oauthUser.ProviderUserID)
+		if err == nil {
+			return user, nil
+		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, err
+		}
+	}
+	email := model.NormalizeEmail(oauthUser.Email)
+	if email == "" {
 		return nil, nil
 	}
 	user, reason, err := gcworkEmailOwner(groupIds, providerId, email)

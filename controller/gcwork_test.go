@@ -475,6 +475,17 @@ func TestGcworkOAuthLoginLinksSameEmailAcrossCasdoorOrganizations(t *testing.T) 
 		assert.Equal(t, user.Id, again.Id)
 	})
 
+	t.Run("signs a subject bound through the other organization in to its account", func(t *testing.T) {
+		user := createUser("B0007", "b0007@example.com", common.RoleCommonUser)
+		bind(user, office, "shared-7")
+		bind(user, research, "rd-7")
+
+		signedIn, err := signIn(research, "shared-7", "")
+		require.NoError(t, err)
+		assert.Equal(t, user.Id, signedIn.Id)
+		assert.Zero(t, bindingCount(research, "shared-7"))
+	})
+
 	refusals := []struct {
 		name    string
 		prepare func() model.User
