@@ -3,6 +3,7 @@ package controller
 import (
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -11,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/oauth"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -328,9 +330,9 @@ func TestGcworkEnsureUserMatchesCasdoorBindings(t *testing.T) {
 	bind := func(user model.User, provider model.CustomOAuthProvider, subject string) {
 		require.NoError(t, model.DB.Create(&model.UserOAuthBinding{UserId: user.Id, ProviderId: provider.Id, ProviderUserId: subject}).Error)
 	}
-	ensure := func(subject, username string) (int, bool) {
+	ensureWithEmail := func(subject, username, email string) (int, bool) {
 		response := accessTokenRequest(router, http.MethodPost, "/api/gcwork/users/ensure", writer, "",
-			fmt.Sprintf(`{"external_id":%q,"username":%q}`, subject, username))
+			fmt.Sprintf(`{"external_id":%q,"username":%q,"email":%q}`, subject, username, email))
 		require.Equal(t, http.StatusOK, response.Code)
 		var payload tokenAPIResponse
 		require.NoError(t, common.Unmarshal(response.Body.Bytes(), &payload))
@@ -341,6 +343,9 @@ func TestGcworkEnsureUserMatchesCasdoorBindings(t *testing.T) {
 			require.NoError(t, common.Unmarshal(payload.Data, &data))
 		}
 		return data.ID, payload.Success
+	}
+	ensure := func(subject, username string) (int, bool) {
+		return ensureWithEmail(subject, username, "")
 	}
 	bindings := func(subject string) []model.UserOAuthBinding {
 		var found []model.UserOAuthBinding
@@ -391,9 +396,129 @@ func TestGcworkEnsureUserMatchesCasdoorBindings(t *testing.T) {
 		assert.Equal(t, office.Id, bindings("sub-4")[0].ProviderId)
 	})
 
+	t.Run("binds the subject to the account bound to another organization with the same email", func(t *testing.T) {
+		user := createUser("A0006")
+		require.NoError(t, model.DB.Model(&user).Update("email", "a0006@example.com").Error)
+		bind(user, research, "rd-6")
+
+		id, ok := ensureWithEmail("sub-6", "office-a0006", "A0006@Example.com")
+		require.True(t, ok)
+		assert.Equal(t, user.Id, id)
+		require.Len(t, bindings("sub-6"), 1)
+		assert.Equal(t, office.Id, bindings("sub-6")[0].ProviderId)
+	})
+
+	t.Run("creates a separate user when the email holder is bound to no organization", func(t *testing.T) {
+		user := createUser("A0007")
+		require.NoError(t, model.DB.Model(&user).Update("email", "a0007@example.com").Error)
+
+		id, ok := ensureWithEmail("sub-7", "office-a0007", "a0007@example.com")
+		require.True(t, ok)
+		assert.NotEqual(t, user.Id, id)
+		created, err := model.GetUserById(id, false)
+		require.NoError(t, err)
+		assert.Empty(t, created.Email, "the taken email is not copied to the new user")
+	})
+
 	t.Run("refuses an unknown provider slug", func(t *testing.T) {
 		t.Setenv("GCWORK_OAUTH_PROVIDERS", "missing")
 		_, ok := ensure("sub-5", "A0005")
 		assert.False(t, ok)
+	})
+}
+
+func TestGcworkOAuthLoginLinksSameEmailAcrossCasdoorOrganizations(t *testing.T) {
+	setupAccessTokenAudit(t)
+	require.NoError(t, model.DB.AutoMigrate(&model.CustomOAuthProvider{}))
+	office := model.CustomOAuthProvider{Name: "Casdoor office", Slug: "casdoor-oa"}
+	research := model.CustomOAuthProvider{Name: "Casdoor research", Slug: "casdoor-rd"}
+	partner := model.CustomOAuthProvider{Name: "Partner SSO", Slug: "partner"}
+	for _, provider := range []*model.CustomOAuthProvider{&office, &research, &partner} {
+		require.NoError(t, model.DB.Create(provider).Error)
+	}
+	t.Setenv("GCWORK_OAUTH_PROVIDERS", "casdoor-oa,casdoor-rd")
+
+	createUser := func(username, email string, role int) model.User {
+		user := model.User{Username: username, DisplayName: username, Email: email, Role: role, Status: common.UserStatusEnabled, AffCode: username}
+		require.NoError(t, model.DB.Create(&user).Error)
+		return user
+	}
+	bind := func(user model.User, provider model.CustomOAuthProvider, subject string) {
+		require.NoError(t, model.DB.Create(&model.UserOAuthBinding{UserId: user.Id, ProviderId: provider.Id, ProviderUserId: subject}).Error)
+	}
+	signIn := func(provider model.CustomOAuthProvider, subject, email string) (*model.User, error) {
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		c.Request = httptest.NewRequest(http.MethodGet, "/api/oauth/"+provider.Slug, nil)
+		user, _, err := findOrCreateOAuthUser(c, oauth.NewGenericOAuthProvider(&provider), &oauth.OAuthUser{ProviderUserID: subject, Email: email}, &oauth.OAuthToken{}, "")
+		return user, err
+	}
+	bindingCount := func(provider model.CustomOAuthProvider, subject string) int64 {
+		var count int64
+		require.NoError(t, model.DB.Model(&model.UserOAuthBinding{}).Where("provider_id = ? AND provider_user_id = ?", provider.Id, subject).Count(&count).Error)
+		return count
+	}
+
+	t.Run("links the second organization to the account bound to the first", func(t *testing.T) {
+		user := createUser("B0001", "b0001@example.com", common.RoleCommonUser)
+		bind(user, office, "oa-1")
+
+		linked, err := signIn(research, "rd-1", " B0001@Example.com ")
+		require.NoError(t, err)
+		assert.Equal(t, user.Id, linked.Id)
+		assert.Equal(t, int64(1), bindingCount(research, "rd-1"))
+		var audit model.AuditLog
+		require.NoError(t, model.LOG_DB.Where("user_id = ? AND action = ?", user.Id, "user.binding_bind").First(&audit).Error)
+		assert.True(t, audit.Success)
+
+		again, err := signIn(research, "rd-1", "b0001@example.com")
+		require.NoError(t, err)
+		assert.Equal(t, user.Id, again.Id)
+	})
+
+	refusals := []struct {
+		name    string
+		prepare func() model.User
+	}{
+		{"an administrator", func() model.User {
+			user := createUser("B0002", "b0002@example.com", common.RoleAdminUser)
+			bind(user, office, "oa-2")
+			return user
+		}},
+		{"an account no Casdoor organization is bound to", func() model.User {
+			return createUser("B0003", "b0003@example.com", common.RoleCommonUser)
+		}},
+		{"an account bound to another subject of the same organization", func() model.User {
+			user := createUser("B0004", "b0004@example.com", common.RoleCommonUser)
+			bind(user, office, "oa-4")
+			bind(user, research, "rd-other")
+			return user
+		}},
+		{"an account with a second factor", func() model.User {
+			user := createUser("B0005", "b0005@example.com", common.RoleCommonUser)
+			bind(user, office, "oa-5")
+			require.NoError(t, model.DB.Create(&model.TwoFA{UserId: user.Id, Secret: "JBSWY3DPEHPK3PXP", IsEnabled: true}).Error)
+			return user
+		}},
+	}
+	for i, tt := range refusals {
+		t.Run("does not link "+tt.name, func(t *testing.T) {
+			user := tt.prepare()
+			subject := fmt.Sprintf("rd-refused-%d", i)
+
+			_, err := signIn(research, subject, user.Email)
+			var notConfirmed *OAuthLegacyBindingNotConfirmedError
+			require.ErrorAs(t, err, &notConfirmed)
+			assert.Zero(t, bindingCount(research, subject))
+		})
+	}
+
+	t.Run("leaves providers outside GCWORK_OAUTH_PROVIDERS unchanged", func(t *testing.T) {
+		user := createUser("B0006", "b0006@example.com", common.RoleCommonUser)
+		bind(user, office, "oa-6")
+
+		_, err := signIn(partner, "partner-6", user.Email)
+		var taken *OAuthEmailAlreadyTakenError
+		require.ErrorAs(t, err, &taken)
+		assert.Zero(t, bindingCount(partner, "partner-6"))
 	})
 }

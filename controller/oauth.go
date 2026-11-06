@@ -475,6 +475,10 @@ func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *o
 		}
 	}
 
+	if linked, err := linkGcworkOAuthLogin(c, provider, oauthUser); linked != nil || err != nil {
+		return linked, nil, err
+	}
+
 	// User doesn't exist, create new user if registration is enabled
 	if !common.RegisterEnabled {
 		return nil, nil, &OAuthRegistrationDisabledError{}

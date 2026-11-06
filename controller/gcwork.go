@@ -6,13 +6,17 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/oauth"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 
 	"github.com/gin-gonic/gin"
@@ -40,8 +44,9 @@ type gcworkEnsureUserRequest struct {
 }
 
 // gcworkOAuthProviders resolves GCWORK_OAUTH_PROVIDERS, the comma-separated
-// slugs of the custom OAuth providers that sign users in through the same
-// Casdoor as GC Work. The first one receives the binding of a new user.
+// slugs of the custom OAuth providers that sign users in through the Casdoor
+// organizations GC Work serves. The first one is the organization GC Work
+// itself signs users in with and receives the bindings GC Work creates.
 func gcworkOAuthProviders() ([]*model.CustomOAuthProvider, error) {
 	providers := []*model.CustomOAuthProvider{}
 	for slug := range strings.SplitSeq(os.Getenv("GCWORK_OAUTH_PROVIDERS"), ",") {
@@ -59,11 +64,14 @@ func gcworkOAuthProviders() ([]*model.CustomOAuthProvider, error) {
 
 // GcworkEnsureUser returns the user bound to a Casdoor subject, creating it in
 // the default group with the default quota on first use. With
-// GCWORK_OAUTH_PROVIDERS set, the subject is matched against those providers'
-// bindings, an unbound user whose username equals the Casdoor username is
-// adopted, and a new user gets a binding to the first provider, so NewAPI web
-// sign-in through Casdoor reaches the same account. Without it, the subject is
-// stored as the OIDC id.
+// GCWORK_OAUTH_PROVIDERS set, the first provider is the organization GC Work
+// signs users in with, and its subjects are bound to that provider. The
+// subject is matched against all those providers' bindings; otherwise an
+// unbound user whose username equals the Casdoor username is adopted, or the
+// account that gcworkEmailOwner names for the email gets the binding, and only
+// then is a new user created, so NewAPI web sign-in through any of these
+// organizations reaches the same account. Without it, the subject is stored as
+// the OIDC id.
 func GcworkEnsureUser(c *gin.Context) {
 	var req gcworkEnsureUserRequest
 	if err := common.DecodeJson(c.Request.Body, &req); err != nil || req.ExternalID == "" || len(req.ExternalID) > gcworkExternalIDMaxLength {
@@ -91,11 +99,7 @@ func GcworkEnsureUser(c *gin.Context) {
 		}
 		if err == nil && existing.OidcId == "" && existing.Role < common.RoleAdminUser {
 			var bound int64
-			ids := make([]int, len(providers))
-			for i, provider := range providers {
-				ids[i] = provider.Id
-			}
-			if err := model.DB.Model(&model.UserOAuthBinding{}).Where("user_id = ? AND provider_id IN ?", existing.Id, ids).Count(&bound).Error; err != nil {
+			if err := model.DB.Model(&model.UserOAuthBinding{}).Where("user_id = ? AND provider_id IN ?", existing.Id, gcworkProviderIds(providers)).Count(&bound).Error; err != nil {
 				common.ApiError(c, err)
 				return
 			}
@@ -114,6 +118,29 @@ func GcworkEnsureUser(c *gin.Context) {
 				common.ApiSuccess(c, gin.H{"id": existing.Id})
 				return
 			}
+		}
+	}
+	if email := model.NormalizeEmail(req.Email); len(providers) > 1 && email != "" {
+		owner, reason, err := gcworkEmailOwner(gcworkProviderIds(providers), providers[0].Id, email)
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		if owner != nil && reason == "" {
+			binding := model.UserOAuthBinding{UserId: owner.Id, ProviderId: providers[0].Id, ProviderUserId: req.ExternalID}
+			if err := model.CreateUserOAuthBinding(&binding); err != nil {
+				// Another node may have bound the subject meanwhile.
+				user, lookupErr := gcworkUserByExternalID(providers, req.ExternalID)
+				if lookupErr == nil && user == nil {
+					lookupErr = err
+				}
+				gcworkEnsureResult(c, user, lookupErr)
+				return
+			}
+			notificationFailed := service.NotifyAccountSecurityChange(service.AccountMailLanguage(c, owner.Id), owner.Email, i18n.MsgSecurityEventLoginLinked, map[string]any{"Provider": providers[0].Name}) != nil
+			recordManageAuditFor(c, owner.Id, "gcwork.user.link_email", map[string]any{"id": owner.Id, "username": owner.Username, "provider": providers[0].Slug, "notification_failed": notificationFailed})
+			common.ApiSuccess(c, gin.H{"id": owner.Id})
+			return
 		}
 	}
 
@@ -195,6 +222,109 @@ func gcworkUserByExternalID(providers []*model.CustomOAuthProvider, externalID s
 		return nil, err
 	}
 	return &user, nil
+}
+
+func gcworkProviderIds(providers []*model.CustomOAuthProvider) []int {
+	ids := make([]int, len(providers))
+	for i, provider := range providers {
+		ids[i] = provider.Id
+	}
+	return ids
+}
+
+// gcworkEmailOwner finds the account that a not yet bound subject of
+// providerId belongs to, judged by email: the only account holding the email,
+// a common user bound to another of the GC Work providers and not to
+// providerId. The GC Work providers are separate Casdoor organizations whose
+// accounts are provisioned by administrators, which is what makes their email
+// trustworthy. A user with a non-empty reason holds the email but does not
+// qualify; a nil user means no single account holds it.
+func gcworkEmailOwner(groupIds []int, providerId int, email string) (*model.User, string, error) {
+	user, err := model.GetUniqueUserByEmail(email)
+	if errors.Is(err, model.ErrEmailNotFound) || errors.Is(err, model.ErrEmailAmbiguous) {
+		return nil, "", nil
+	}
+	if err != nil {
+		return nil, "", err
+	}
+	if user.Role >= common.RoleAdminUser {
+		return user, "administrator", nil
+	}
+	var bindings []model.UserOAuthBinding
+	if err := model.DB.Where("user_id = ? AND provider_id IN ?", user.Id, groupIds).Find(&bindings).Error; err != nil {
+		return nil, "", err
+	}
+	if len(bindings) == 0 {
+		return user, "no_casdoor_binding", nil
+	}
+	if slices.ContainsFunc(bindings, func(b model.UserOAuthBinding) bool { return b.ProviderId == providerId }) {
+		return user, "provider_bound_to_another_subject", nil
+	}
+	return user, "", nil
+}
+
+// linkGcworkOAuthLogin handles a web sign-in through one of the
+// GCWORK_OAUTH_PROVIDERS whose subject is not bound yet, linking it to the
+// account gcworkEmailOwner names. A nil user and error means the sign-in is not
+// such a case and registration proceeds as usual.
+func linkGcworkOAuthLogin(c *gin.Context, provider oauth.Provider, oauthUser *oauth.OAuthUser) (*model.User, error) {
+	generic, ok := provider.(*oauth.GenericOAuthProvider)
+	email := model.NormalizeEmail(oauthUser.Email)
+	if !ok || email == "" {
+		return nil, nil
+	}
+	providers, err := gcworkOAuthProviders()
+	if err != nil {
+		common.SysError(common.LogText("[OAuth] GC Work account linking skipped: %s", err.Error()))
+		return nil, nil
+	}
+	providerId := generic.GetProviderId()
+	groupIds := gcworkProviderIds(providers)
+	if len(groupIds) < 2 || !slices.Contains(groupIds, providerId) {
+		return nil, nil
+	}
+	user, reason, err := gcworkEmailOwner(groupIds, providerId, email)
+	if err != nil || user == nil {
+		return nil, err
+	}
+	if user.Status != common.UserStatusEnabled {
+		// The caller rejects the disabled account; nothing is linked to it.
+		return user, nil
+	}
+
+	params := map[string]any{"provider": generic.GetConfig().Slug, "provider_user_id": oauthUser.ProviderUserID, "gcwork_email_link": true}
+	audit := func(success bool) {
+		params["success"] = success
+		model.RecordOperationAuditLog(user.Id, user.Role, auditContentEN("user.binding_bind", params), c.ClientIP(), "user.binding_bind", params, nil, &model.AuditRequestInfo{
+			Method: c.Request.Method, Route: c.FullPath(), Path: c.FullPath(), Status: c.Writer.Status(), Success: success,
+		}, c)
+	}
+	if reason == "" {
+		state, err := model.GetUserVerificationState(user.Id)
+		if err != nil {
+			return nil, err
+		}
+		if state.HasTwoFA || state.HasPasskey {
+			// Linking before the second factor is checked would let the new
+			// subject attach itself even when that check then fails.
+			reason = "second_factor_enabled"
+		}
+	}
+	if reason != "" {
+		params["reason"] = reason
+		audit(false)
+		return nil, &OAuthLegacyBindingNotConfirmedError{}
+	}
+
+	err = model.DB.Transaction(func(tx *gorm.DB) error {
+		return model.CreateUserOAuthBindingWithTx(tx, &model.UserOAuthBinding{UserId: user.Id, ProviderId: providerId, ProviderUserId: oauthUser.ProviderUserID})
+	})
+	if err != nil {
+		return nil, err
+	}
+	params["notification_failed"] = service.NotifyAccountSecurityChange(service.AccountMailLanguage(c, user.Id), user.Email, i18n.MsgSecurityEventLoginLinked, map[string]any{"Provider": provider.GetName()}) != nil
+	audit(true)
+	return user, nil
 }
 
 func gcworkEnsureResult(c *gin.Context, user *model.User, err error) {
