@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/chatlog/convert"
 	"github.com/QuantumNous/new-api/common"
@@ -232,4 +233,66 @@ func TestCaptureStoresRecordForViewerAndArchive(t *testing.T) {
 	assert.True(t, truncated.Truncated)
 	assert.Nil(t, truncated.Response)
 	assert.Len(t, truncated.ResponseRaw, 1<<20)
+}
+
+func TestPurgeExpiredRecordsKeepsRecentRows(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:chatlog_retention_test?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	model.DB, model.LOG_DB = db, db
+	require.NoError(t, db.AutoMigrate(&ChatRecord{}))
+
+	const cutoff = int64(1_000_000)
+	expiredCount := retentionBatchSize*2 + 7
+	rows := make([]ChatRecord, 0, expiredCount+3)
+	for i := range expiredCount {
+		rows = append(rows, ChatRecord{RequestId: "old", CreatedAt: cutoff - 1 - int64(i), Payload: []byte("x")})
+	}
+	for _, createdAt := range []int64{cutoff, cutoff + 1, cutoff + 3600} {
+		rows = append(rows, ChatRecord{RequestId: "recent", CreatedAt: createdAt, Payload: []byte("x")})
+	}
+	require.NoError(t, db.CreateInBatches(rows, 100).Error)
+
+	deleted, err := purgeExpiredRecords(cutoff, time.Now().Add(-time.Second))
+	require.NoError(t, err)
+	assert.Zero(t, deleted, "nothing is deleted once the window has closed")
+
+	deleted, err = purgeExpiredRecords(cutoff, time.Now().Add(time.Hour))
+	require.NoError(t, err)
+	assert.Equal(t, int64(expiredCount), deleted)
+
+	var remaining []string
+	require.NoError(t, db.Model(&ChatRecord{}).Order("id").Pluck("request_id", &remaining).Error)
+	assert.Equal(t, []string{"recent", "recent", "recent"}, remaining)
+}
+
+func TestRetentionWindow(t *testing.T) {
+	at := func(hour, minute int) time.Time { return time.Date(2026, 11, 5, hour, minute, 0, 0, time.UTC) }
+	tests := []struct {
+		value    string
+		at       time.Time
+		contains bool
+		closesAt time.Time
+	}{
+		{value: "2-6", at: at(2, 0), contains: true, closesAt: at(6, 0)},
+		{value: "2-6", at: at(5, 59), contains: true, closesAt: at(6, 0)},
+		{value: "2-6", at: at(6, 0), contains: false},
+		{value: "2-6", at: at(14, 0), contains: false},
+		{value: "23-5", at: at(23, 30), contains: true, closesAt: at(5, 0).AddDate(0, 0, 1)},
+		{value: "23-5", at: at(1, 0), contains: true, closesAt: at(5, 0)},
+		{value: "23-5", at: at(12, 0), contains: false},
+		{value: "0-24", at: at(13, 0), contains: true, closesAt: at(0, 0).AddDate(0, 0, 1)},
+	}
+	for _, tt := range tests {
+		window, err := parseRetentionWindow(tt.value)
+		require.NoError(t, err, tt.value)
+		assert.Equal(t, tt.contains, window.contains(tt.at), "%s at %s", tt.value, tt.at.Format("15:04"))
+		if tt.contains {
+			assert.Equal(t, tt.closesAt, window.closesAt(tt.at), "%s at %s", tt.value, tt.at.Format("15:04"))
+		}
+	}
+
+	for _, invalid := range []string{"", "2", "6-6", "24-2", "2-25", "a-6"} {
+		_, err := parseRetentionWindow(invalid)
+		assert.Error(t, err, invalid)
+	}
 }

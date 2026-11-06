@@ -39,6 +39,7 @@ type config struct {
 	queueSize         int
 	dbRetentionDays   int
 	fileRetentionDays int
+	retentionWindow   retentionWindow
 }
 
 var (
@@ -64,6 +65,15 @@ func loadConfig() config {
 	if node == "" {
 		node, _ = os.Hostname()
 	}
+	window := defaultRetentionWindow
+	if value := common.GetEnvOrDefaultString("CHATLOG_RETENTION_HOURS", ""); value != "" {
+		parsed, err := parseRetentionWindow(value)
+		if err != nil {
+			common.SysError("chatlog: " + err.Error() + ", using 2-6")
+		} else {
+			window = parsed
+		}
+	}
 	return config{
 		enabled:           common.GetEnvOrDefaultBool("CHATLOG_ENABLED", false),
 		dir:               common.GetEnvOrDefaultString("CHATLOG_DIR", "/data/chatlog"),
@@ -73,6 +83,7 @@ func loadConfig() config {
 		queueSize:         common.GetEnvOrDefault("CHATLOG_QUEUE_SIZE", 256),
 		dbRetentionDays:   common.GetEnvOrDefault("CHATLOG_DB_RETENTION_DAYS", 30),
 		fileRetentionDays: common.GetEnvOrDefault("CHATLOG_FILE_RETENTION_DAYS", 0),
+		retentionWindow:   window,
 	}
 }
 

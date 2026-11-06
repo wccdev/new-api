@@ -34,6 +34,7 @@ chatlog 是本 fork 独有的功能：完整记录对话类中继请求的「请
 | `CHATLOG_MAX_RESP_MB` | `8` | 可选 | 单条响应体上限（MB），同上 |
 | `CHATLOG_DB_RETENTION_DAYS` | `30` | 可选 | 数据库里"界面查看用副本"的保留天数，`0` = 永久。只在主节点执行清理 |
 | `CHATLOG_FILE_RETENTION_DAYS` | `0` | 可选 | 归档文件保留天数，`0` = 永久。每个节点清理自己的目录 |
+| `CHATLOG_RETENTION_HOURS` | `2-6` | 可选 | 清理只在这个本地时段内执行（按容器 `TZ`），格式 `开始时-结束时`，含开始不含结束；`23-5` 表示跨午夜，`0-24` 表示全天 |
 | `CHATLOG_QUEUE_SIZE` | `256` | 可选 | 异步写入队列长度，满了丢弃录制并在系统日志计数 |
 
 所有变量只在启动时读取，修改后需要重启容器。
@@ -98,7 +99,7 @@ services:
 |---|---|---|
 | 位置 | **各节点本地** `CHATLOG_DIR/dt=YYYY-MM-DD/HH-<节点名>.jsonl.zst`，容器内 `/data/chatlog`，按默认 compose 即宿主机 `./data/chatlog` | 共享数据库的 `chat_records` 表（配置了 `LOG_SQL_DSN` 就在日志库；日志库是 ClickHouse 时在主库） |
 | 内容 | 每行一条 JSON 记录，每条记录是一个独立 zstd 帧，整个文件是合法的 `.jsonl.zst` | `payload` 列 = 同一条记录的 zstd 压缩字节 |
-| 保留 | 默认永久 | 默认 30 天，主节点每小时清理 |
+| 保留 | 默认永久 | 默认 30 天，主节点在 `CHATLOG_RETENTION_HOURS` 时段（默认凌晨 2–6 点）内清理 |
 | 谁读 | `chatlog-export`、你自己的脚本 | `GET /api/chatlog/:request_id`（管理员）、`/api/chatlog/self/:request_id`（本人） |
 
 两个节点各写各的文件，文件名带节点名，拷到同一个目录不会冲突。
@@ -221,6 +222,11 @@ LLaMA-Factory 用 `formatting: sharegpt`，并在 `dataset_info.json` 的 `tags`
   `system_disk_overloaded`。归档目录和系统盘同盘时要留意。
 - 数据库：`chat_records.payload` 在 MySQL 是 `longblob`、PostgreSQL 是 `bytea`。想让界面能看更久就调大
   `CHATLOG_DB_RETENTION_DAYS`，代价是库变大。
+- 清理按每批 200 行分批删除，只在 `CHATLOG_RETENTION_HOURS` 时段内进行，到点即停、下个时段接着删，
+  调小保留天数后积压的旧数据会分几个晚上删完；有删除时系统日志打印
+  `chatlog: database retention removed N records ...`。
+- PostgreSQL 删除后空间只会被表自身复用，不会还给操作系统。表已经膨胀时，确认清理跑完后在低峰期执行
+  `VACUUM FULL chat_records;`（锁表，需要约等于剩余数据量的空闲磁盘）或用 `pg_repack` 在线收缩。
 
 ## 5. 镜像构建与升级（GitHub Actions）
 

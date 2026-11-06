@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -131,12 +132,88 @@ func findRecord(requestId string) (*Record, error) {
 	return record, nil
 }
 
+// retentionBatchSize bounds each DELETE: rows carry multi-megabyte payloads,
+// and a backlog of days removed in one statement would hold a huge
+// transaction and burst WAL/binlog on the shared database.
+const retentionBatchSize = 200
+
+// retentionWindow is the local-time hour range [startHour, endHour) in which
+// cleanup may run, so deletes stay out of daytime traffic. startHour greater
+// than endHour wraps past midnight; 0-24 allows any hour.
+type retentionWindow struct {
+	startHour int
+	endHour   int
+}
+
+var defaultRetentionWindow = retentionWindow{startHour: 2, endHour: 6}
+
+// parseRetentionWindow reads an "H-H" hour range such as "2-6" or "23-5".
+func parseRetentionWindow(value string) (retentionWindow, error) {
+	startText, endText, found := strings.Cut(strings.TrimSpace(value), "-")
+	start, startErr := strconv.Atoi(strings.TrimSpace(startText))
+	end, endErr := strconv.Atoi(strings.TrimSpace(endText))
+	if !found || startErr != nil || endErr != nil || start < 0 || start > 23 || end < 0 || end > 24 || start == end {
+		return retentionWindow{}, fmt.Errorf("invalid retention window %q, want H-H such as 2-6", value)
+	}
+	return retentionWindow{startHour: start, endHour: end}, nil
+}
+
+func (w retentionWindow) contains(at time.Time) bool {
+	hour := at.Hour()
+	if w.startHour < w.endHour {
+		return hour >= w.startHour && hour < w.endHour
+	}
+	return hour >= w.startHour || hour < w.endHour
+}
+
+// closesAt is the first end of the window after at.
+func (w retentionWindow) closesAt(at time.Time) time.Time {
+	end := time.Date(at.Year(), at.Month(), at.Day(), w.endHour, 0, 0, 0, at.Location())
+	if !end.After(at) {
+		end = end.AddDate(0, 0, 1)
+	}
+	return end
+}
+
+// purgeExpiredRecords deletes viewer copies created before cutoff in id
+// batches until none are left or deadline passes, and returns how many rows
+// were removed. A backlog cut off by the deadline resumes in the next window.
+func purgeExpiredRecords(cutoff int64, deadline time.Time) (int64, error) {
+	var deleted int64
+	for time.Now().Before(deadline) {
+		var ids []int64
+		err := recordDB().Model(&ChatRecord{}).Where("created_at < ?", cutoff).
+			Order("id").Limit(retentionBatchSize).Pluck("id", &ids).Error
+		if err != nil || len(ids) == 0 {
+			return deleted, err
+		}
+		result := recordDB().Where("id IN ?", ids).Delete(&ChatRecord{})
+		if result.Error != nil {
+			return deleted, result.Error
+		}
+		deleted += result.RowsAffected
+		if len(ids) < retentionBatchSize {
+			return deleted, nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return deleted, nil
+}
+
 func runRetention() {
-	for {
+	for ; ; time.Sleep(time.Hour) {
+		now := time.Now()
+		if !settings.retentionWindow.contains(now) {
+			continue
+		}
 		if common.IsMasterNode && settings.dbRetentionDays > 0 {
-			cutoff := time.Now().AddDate(0, 0, -settings.dbRetentionDays).Unix()
-			if err := recordDB().Where("created_at < ?", cutoff).Delete(&ChatRecord{}).Error; err != nil {
+			cutoff := now.AddDate(0, 0, -settings.dbRetentionDays).Unix()
+			deleted, err := purgeExpiredRecords(cutoff, settings.retentionWindow.closesAt(now))
+			if err != nil {
 				common.SysError("chatlog: database retention failed: " + err.Error())
+			}
+			if deleted > 0 {
+				common.SysLog(fmt.Sprintf("chatlog: database retention removed %d records older than %d days", deleted, settings.dbRetentionDays))
 			}
 		}
 		if settings.fileRetentionDays > 0 {
@@ -149,6 +226,5 @@ func runRetention() {
 				}
 			}
 		}
-		time.Sleep(time.Hour)
 	}
 }
