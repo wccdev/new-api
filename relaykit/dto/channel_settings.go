@@ -147,6 +147,10 @@ type ChannelOtherSettings struct {
 	// PluginConfig is the config a type-61 channel gives its plugin, checked
 	// against the plugin's meta.channelConfig when the channel is saved.
 	PluginConfig json.RawMessage `json:"plugin_config,omitempty"`
+	// PluginRoutes switches relay routes of a type-61 channel's plugin on or
+	// off, keyed by route (see pluginkit.RelayRouteKey). Only entries that
+	// differ from the route's default are kept.
+	PluginRoutes map[string]bool `json:"plugin_routes,omitempty"`
 }
 
 func (s *ChannelOtherSettings) IsOpenRouterEnterprise() bool {
@@ -180,10 +184,12 @@ const (
 	advancedCustomConverterOpenAIResponsesToGemini     = "openai_responses_to_gemini_generate_content"
 	advancedCustomConverterGeminiContentToOpenAIChat   = "gemini_generate_content_to_openai_chat_completions"
 	advancedCustomConverterOpenAIChatToGeminiContent   = "openai_chat_completions_to_gemini_generate_content"
-	// Same values as relayconvert.ConverterClaudeMessagesToOpenAIResponses and
-	// relayconvert.ConverterGeminiContentToOpenAIResponses.
+	// Same values as relayconvert.ConverterClaudeMessagesToOpenAIResponses,
+	// relayconvert.ConverterGeminiContentToOpenAIResponses and
+	// relayconvert.ConverterOpenAIResponsesToClaudeMessages.
 	advancedCustomConverterClaudeMessagesToOpenAIResponses = "claude_messages_to_openai_responses"
 	advancedCustomConverterGeminiContentToOpenAIResponses  = "gemini_generate_content_to_openai_responses"
+	advancedCustomConverterOpenAIResponsesToClaudeMessages = "openai_responses_to_claude_messages"
 )
 
 const (
@@ -472,6 +478,7 @@ func IsAdvancedCustomConverterAllowed(converter string) bool {
 		advancedCustomConverterOpenAIChatToOpenAIResponses,
 		advancedCustomConverterOpenAIResponsesToOpenAIChat,
 		advancedCustomConverterOpenAIResponsesToGemini,
+		advancedCustomConverterOpenAIResponsesToClaudeMessages,
 		advancedCustomConverterGeminiContentToOpenAIChat,
 		advancedCustomConverterOpenAIChatToGeminiContent,
 		advancedCustomConverterClaudeMessagesToOpenAIResponses,
@@ -681,11 +688,9 @@ func validateAdvancedCustomConverterPath(index int, incomingPath string, convert
 		if incomingPath == "/v1/chat/completions" {
 			return nil
 		}
-	case advancedCustomConverterOpenAIResponsesToOpenAIChat:
-		if incomingPath == "/v1/responses" {
-			return nil
-		}
-	case advancedCustomConverterOpenAIResponsesToGemini:
+	case advancedCustomConverterOpenAIResponsesToOpenAIChat,
+		advancedCustomConverterOpenAIResponsesToGemini,
+		advancedCustomConverterOpenAIResponsesToClaudeMessages:
 		if incomingPath == "/v1/responses" {
 			return nil
 		}
